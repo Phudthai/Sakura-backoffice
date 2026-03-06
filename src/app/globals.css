@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===========================
+   Sakura Theme - Custom Base
+   =========================== */
+
+@layer base {
+  html {
+    overflow-y: scroll;          /* always show scrollbar gutter — prevents layout shift */
+  }
+
+  body {
+    @apply bg-body text-sakura-900 font-sans antialiased;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-sakura-100;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-sakura-400 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-sakura-500;
+  }
+}
+
+/* ===========================
+   Component Utilities
+   =========================== */
+
+@layer components {
+  /* Gradient button style */
+  .btn-gradient {
+    @apply px-6 py-2.5 bg-gradient-header text-white border-none
+           rounded-full text-sm font-semibold cursor-pointer
+           shadow-button transition-opacity duration-200
+           hover:opacity-85 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  /* Shimmer skeleton background */
+  .skeleton-shimmer {
+    background: linear-gradient(90deg, #f3f4f6 0%, #e5e7eb 50%, #f3f4f6 100%);
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
+}
+
+/* ===========================
+   Animations
+   =========================== */
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
