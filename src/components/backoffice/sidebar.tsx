@@ -6,8 +6,8 @@ import {
   LayoutDashboard,
   ShoppingCart,
   Users,
-  Package,
   Gavel,
+  UserCog,
   Settings,
 } from 'lucide-react'
 
@@ -15,8 +15,8 @@ const NAV_ITEMS = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/orders', label: 'Orders', icon: ShoppingCart },
   { href: '/customers', label: 'Customers', icon: Users },
-  { href: '/products', label: 'Products', icon: Package },
   { href: '/auctions', label: 'Auctions', icon: Gavel },
+  { href: '/staffs', label: 'Staffs', icon: UserCog },
   { href: '/settings', label: 'Settings', icon: Settings },
 ] as const
 

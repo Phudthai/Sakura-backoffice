@@ -41,6 +41,18 @@ export interface AdminAuction {
   bidCount: number
   endTimeISO: string
   status: 'active' | 'ended' | 'cancelled'
+  bidderId: string
+  sourceUrl: string
+}
+
+export interface Staff {
+  id: string
+  name: string
+  email: string
+  phone: string | null
+  position: string
+  isActive: boolean
+  createdAt: string
 }
 
 export interface DashboardStats {

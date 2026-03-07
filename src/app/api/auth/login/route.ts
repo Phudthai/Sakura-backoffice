@@ -17,19 +17,6 @@ export async function POST(request: NextRequest) {
     const data = await res.json()
     const token = data.data?.token
 
-    console.log('[Login] backend status:', res.status, 'success:', data.success, 'hasToken:', !!token)
-    if (token) {
-      const parts = token.split('.')
-      if (parts.length === 3) {
-        try {
-          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString())
-          console.log('[Login] JWT payload:', JSON.stringify(payload))
-        } catch (e) {
-          console.log('[Login] JWT decode error:', e)
-        }
-      }
-    }
-
     if (token) {
       const { token: _token, ...rest } = data.data
       const response = NextResponse.json({ ...data, data: rest }, { status: res.status })

@@ -26,18 +26,12 @@ function parseJwtPayload(token: string): { userId: string; email: string; role: 
 export function middleware(request: NextRequest) {
   const token = request.cookies.get(COOKIE_NAME)?.value
 
-  console.log('[Middleware]', request.nextUrl.pathname, 'hasToken:', !!token)
-
   if (!token) {
-    console.log('[Middleware] No token → redirect /login')
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
   const payload = parseJwtPayload(token)
-  console.log('[Middleware] parsed payload:', JSON.stringify(payload))
-
   if (!payload || payload.role.toUpperCase() !== 'ADMIN') {
-    console.log('[Middleware] Role check failed → redirect /login')
     return NextResponse.redirect(new URL('/login', request.url))
   }
 

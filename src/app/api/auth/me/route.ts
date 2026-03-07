@@ -4,7 +4,6 @@ import { getCurrentUser } from '@/lib/auth'
 export async function GET() {
   try {
     const payload = getCurrentUser()
-    console.log('[/api/auth/me] payload:', JSON.stringify(payload))
     if (!payload) {
       return NextResponse.json(
         { success: false, error: { code: 'UNAUTHENTICATED', message: 'Not authenticated' } },

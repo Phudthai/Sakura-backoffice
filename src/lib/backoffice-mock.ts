@@ -4,6 +4,7 @@ import type {
   AdminProduct,
   AdminAuction,
   DashboardStats,
+  Staff,
 } from '@/types/backoffice'
 
 function hoursFromNow(hours: number): string {
@@ -280,6 +281,8 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 2,
     endTimeISO: hoursFromNow(18),
     status: 'active',
+    bidderId: 'u***4',
+    sourceUrl: 'https://jp.mercari.com/item/m123456',
   },
   {
     id: 'auc-2',
@@ -290,6 +293,8 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 7,
     endTimeISO: hoursFromNow(22),
     status: 'active',
+    bidderId: 'k***7',
+    sourceUrl: 'https://jp.mercari.com/item/m789012',
   },
   {
     id: 'auc-3',
@@ -300,6 +305,8 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 3,
     endTimeISO: hoursFromNow(44),
     status: 'active',
+    bidderId: 's***2',
+    sourceUrl: 'https://jp.mercari.com/item/m345678',
   },
   {
     id: 'auc-4',
@@ -310,6 +317,8 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 6,
     endTimeISO: new Date(Date.now() - 3600_000).toISOString(),
     status: 'ended',
+    bidderId: 'm***9',
+    sourceUrl: 'https://jp.mercari.com/item/m901234',
   },
   {
     id: 'auc-5',
@@ -320,6 +329,8 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 4,
     endTimeISO: new Date(Date.now() - 7200_000).toISOString(),
     status: 'ended',
+    bidderId: 'a***1',
+    sourceUrl: 'https://jp.mercari.com/item/m567890',
   },
   {
     id: 'auc-6',
@@ -330,5 +341,46 @@ export const MOCK_AUCTIONS: AdminAuction[] = [
     bidCount: 3,
     endTimeISO: new Date(Date.now() - 86400_000).toISOString(),
     status: 'ended',
+    bidderId: 'n***3',
+    sourceUrl: 'https://jp.mercari.com/item/m112233',
+  },
+]
+
+export const MOCK_STAFFS: Staff[] = [
+  {
+    id: 'staff-1',
+    name: 'Sakura Admin',
+    email: 'admin@sakura.com',
+    phone: '08-0000-0000',
+    position: 'Manager',
+    isActive: true,
+    createdAt: '2025-11-01T00:00:00Z',
+  },
+  {
+    id: 'staff-2',
+    name: 'Yuki Tanaka',
+    email: 'yuki@sakura.com',
+    phone: '08-1111-0001',
+    position: 'Buyer',
+    isActive: true,
+    createdAt: '2026-01-10T09:00:00Z',
+  },
+  {
+    id: 'staff-3',
+    name: 'Aoi Suzuki',
+    email: 'aoi@sakura.com',
+    phone: '08-1111-0002',
+    position: 'Buyer',
+    isActive: true,
+    createdAt: '2026-01-15T10:00:00Z',
+  },
+  {
+    id: 'staff-4',
+    name: 'Hana Watanabe',
+    email: 'hana@sakura.com',
+    phone: null,
+    position: 'Support',
+    isActive: false,
+    createdAt: '2026-02-01T08:00:00Z',
   },
 ]
