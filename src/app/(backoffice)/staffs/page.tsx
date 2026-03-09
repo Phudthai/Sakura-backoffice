@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Plus, X, Loader2 } from 'lucide-react'
 import type { Staff } from '@/types/backoffice'
+import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 
 export default function StaffsPage() {
   const [staffs, setStaffs] = useState<Staff[]>([])
@@ -14,7 +15,7 @@ export default function StaffsPage() {
 
   const fetchStaffs = useCallback(async () => {
     try {
-      const res = await fetch('/api/backoffice/staffs')
+      const res = await fetch(`${API_BACKOFFICE_PREFIX}/staffs`)
       const json = await res.json()
       if (json.success) {
         setStaffs(json.data ?? [])
@@ -36,7 +37,7 @@ export default function StaffsPage() {
     if (!form.name) return
     setIsSubmitting(true)
     try {
-      const res = await fetch('/api/backoffice/staffs', {
+      const res = await fetch(`${API_BACKOFFICE_PREFIX}/staffs`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: form.name }),

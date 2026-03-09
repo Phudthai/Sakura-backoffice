@@ -1,13 +1,15 @@
-'use client'
+"use client";
 
-import { MOCK_CUSTOMERS } from '@/lib/backoffice-mock'
+import { MOCK_CUSTOMERS } from "@/lib/backoffice-mock";
 
 export default function CustomersPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-xl font-semibold text-sakura-900">Customers</h1>
-        <span className="text-sm text-muted-dark">{MOCK_CUSTOMERS.length} customers</span>
+        <span className="text-sm text-muted-dark">
+          {MOCK_CUSTOMERS.length} customers
+        </span>
       </div>
 
       <div className="rounded-xl border border-card-border bg-white shadow-card overflow-hidden">
@@ -33,16 +35,18 @@ export default function CustomersPage() {
                   <td className="px-5 py-3 font-medium text-sakura-900">
                     {customer.name}
                   </td>
-                  <td className="px-5 py-3 text-sakura-700">{customer.email}</td>
+                  <td className="px-5 py-3 text-sakura-700">
+                    {customer.email}
+                  </td>
                   <td className="px-5 py-3 text-sakura-700">
                     {customer.phone ?? <span className="text-muted">-</span>}
                   </td>
                   <td className="px-5 py-3">
                     <span
                       className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        customer.role === 'admin'
-                          ? 'bg-purple-100 text-purple-800'
-                          : 'bg-gray-100 text-gray-800'
+                        customer.role === "admin"
+                          ? "bg-purple-100 text-purple-800"
+                          : "bg-gray-100 text-gray-800"
                       }`}
                     >
                       {customer.role}
@@ -50,17 +54,25 @@ export default function CustomersPage() {
                   </td>
                   <td className="px-5 py-3 text-center">
                     {customer.isEmailVerified ? (
-                      <span className="inline-block h-2 w-2 rounded-full bg-green-500" title="Verified" />
+                      <span
+                        className="inline-block h-2 w-2 rounded-full bg-green-500"
+                        title="Verified"
+                      />
                     ) : (
-                      <span className="inline-block h-2 w-2 rounded-full bg-gray-300" title="Not verified" />
+                      <span
+                        className="inline-block h-2 w-2 rounded-full bg-gray-300"
+                        title="Not verified"
+                      />
                     )}
                   </td>
-                  <td className="px-5 py-3 text-center">{customer.orderCount}</td>
+                  <td className="px-5 py-3 text-center">
+                    {customer.orderCount}
+                  </td>
                   <td className="px-5 py-3 text-muted-dark">
-                    {new Date(customer.createdAt).toLocaleDateString('th-TH', {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
+                    {new Date(customer.createdAt).toLocaleDateString("th-TH", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
                     })}
                   </td>
                 </tr>
@@ -70,5 +82,5 @@ export default function CustomersPage() {
         </div>
       </div>
     </div>
-  )
+  );
 }

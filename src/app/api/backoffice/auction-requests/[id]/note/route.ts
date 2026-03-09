@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { proxyToBackend } from '@/lib/api-proxy'
+import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 
 export async function PATCH(
   request: NextRequest,
@@ -7,7 +8,7 @@ export async function PATCH(
 ) {
   const { id } = await params
   const body = await request.json()
-  return proxyToBackend(request, `/api/auction-requests/${id}/note`, {
+  return proxyToBackend(request, `${API_BACKOFFICE_PREFIX}/auction-requests/${id}/note`, {
     method: 'PATCH',
     body,
   })

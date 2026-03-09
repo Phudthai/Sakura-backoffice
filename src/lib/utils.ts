@@ -2,7 +2,8 @@
  * Format price in Japanese Yen
  * @example formatPrice(5000) => "5,000"
  */
-export function formatPrice(price: number): string {
+export function formatPrice(price: number | null | undefined): string {
+  if (price == null || typeof price !== 'number') return '-'
   return price.toLocaleString('ja-JP')
 }
 

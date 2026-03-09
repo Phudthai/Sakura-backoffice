@@ -1,65 +1,65 @@
 export interface AdminOrder {
-  id: string
-  orderNumber: string
-  customerName: string
-  customerEmail: string
-  status: string
-  totalJPY: number
-  totalTHB: number
-  itemCount: number
-  createdAt: string
+  id: string;
+  orderNumber: string;
+  customerName: string;
+  customerEmail: string;
+  status: string;
+  totalJPY: number;
+  totalTHB: number;
+  itemCount: number;
+  createdAt: string;
 }
 
 export interface AdminCustomer {
-  id: string
-  name: string
-  email: string
-  phone: string | null
-  role: string
-  isEmailVerified: boolean
-  orderCount: number
-  createdAt: string
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  role: string;
+  isEmailVerified: boolean;
+  orderCount: number;
+  createdAt: string;
 }
 
 export interface AdminProduct {
-  id: string
-  name: string
-  price: number
-  imageUrl: string
-  condition: string
-  isAuction: boolean
-  status: 'active' | 'sold' | 'draft'
-  createdAt: string
+  id: string;
+  name: string;
+  price: number;
+  imageUrl: string;
+  condition: string;
+  isAuction: boolean;
+  status: "active" | "sold" | "draft";
+  createdAt: string;
 }
 
 export interface AdminAuction {
-  id: string
-  productName: string
-  imageUrl: string
-  startingPrice: number
-  currentBid: number
-  bidCount: number
-  endTimeISO: string
-  status: 'active' | 'ended' | 'cancelled'
-  bidderId: string
-  sourceUrl: string
+  id: string;
+  productName: string;
+  imageUrl: string;
+  startingPrice: number;
+  currentBid: number;
+  bidCount: number;
+  endTimeISO: string;
+  status: "active" | "ended" | "cancelled";
+  bidderId: string;
+  sourceUrl: string;
 }
 
 export interface Staff {
-  id: string
-  name: string
-  email: string
-  phone: string | null
-  position: string
-  isActive: boolean
-  createdAt: string
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  position: string;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface DashboardStats {
-  pendingOrders: number
-  processingOrders: number
-  shippedOrders: number
-  completedOrders: number
-  totalRevenueTHB: number
-  totalCustomers: number
+  pendingOrders: number;
+  processingOrders: number;
+  shippedOrders: number;
+  completedOrders: number;
+  totalRevenueTHB: number;
+  totalCustomers: number;
 }

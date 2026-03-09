@@ -8,6 +8,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react'
+import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,10 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
-  /** Fetch current user from /api/auth/me */
+  /** Fetch current user from /api/backoffice/auth/me */
   const refreshUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me')
+      const res = await fetch('/api/backoffice/auth/me')
       if (res.ok) {
         const json = await res.json()
         setUser(json.data.user)
@@ -77,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (email: string, password: string) => {
       try {
-        const res = await fetch('/api/auth/login', {
+        const res = await fetch(`${API_BACKOFFICE_PREFIX}/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
@@ -100,7 +101,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     async (data: RegisterData) => {
       try {
-        const res = await fetch('/api/auth/register', {
+        const res = await fetch('/api/backoffice/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data),
@@ -122,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** Logout */
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' })
+      await fetch(`${API_BACKOFFICE_PREFIX}/auth/logout`, { method: 'POST' })
     } catch {
       // ignore
     }
