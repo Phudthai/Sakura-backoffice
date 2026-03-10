@@ -22,7 +22,7 @@ interface PendingBid {
     yahooItemId: string
     currentPrice: number
     endTime: string
-    userCode?: string
+    username?: string
     externalId?: string
     note?: string | null
   }
@@ -130,7 +130,7 @@ export default function PendingBidsPage() {
     ? bids.filter(
         (b) =>
           (b.auctionRequest?.title ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
-          (b.auctionRequest?.userCode ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
+          (b.auctionRequest?.username ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
           (b.auctionRequest?.externalId ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
           String(b.id).includes(filterUser)
       )
@@ -261,7 +261,7 @@ export default function PendingBidsPage() {
             type="text"
             value={filterUser}
             onChange={(e) => setFilterUser(e.target.value)}
-            placeholder="Search by title, user ID or user code..."
+            placeholder="Search by title, user ID or user name..."
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-card-border bg-white text-sm
                        placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-shadow"
           />
@@ -279,7 +279,7 @@ export default function PendingBidsPage() {
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">User ID</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">User Code</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">User Name</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Product</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">Auction URL</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">Current Bid</th>
@@ -308,7 +308,7 @@ export default function PendingBidsPage() {
                       </td>
                       <td className="px-6 py-5 align-middle text-center w-36">
                         <span className="inline-flex items-center rounded-lg bg-sakura-100 px-2.5 py-1 font-mono text-xs font-semibold text-sakura-800">
-                          {bid.auctionRequest?.userCode ?? '-'}
+                          {bid.auctionRequest?.username ?? '-'}
                         </span>
                       </td>
                       <td className="px-6 py-5 align-middle">

@@ -17,8 +17,9 @@ interface AuctionRequest {
   status: string
   currentPrice: number
   note: string | null
-  userCode?: string
+  username?: string
   externalId?: string
+  register_url?: string
   lastBid?: { price: number; status: string }
 }
 
@@ -78,7 +79,6 @@ function Countdown({ endISO }: { endISO?: string | null }) {
 
 async function submitToBackend(
   url: string,
-  userCode?: string,
   firstBidPrice?: number
 ): Promise<{ id: number; data: unknown }> {
   const res = await fetch(`${API_BACKOFFICE_PREFIX}/auction-requests`, {
@@ -86,7 +86,6 @@ async function submitToBackend(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url,
-      userCode: userCode?.trim() || undefined,
       firstBidPrice: firstBidPrice ? Number(firstBidPrice) : undefined,
     }),
   })
@@ -104,7 +103,6 @@ export default function OpenBidForUserPage() {
   const [filterUser, setFilterUser] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [url, setUrl] = useState('')
-  const [userCode, setUserCode] = useState('')
   const [firstBidPrice, setFirstBidPrice] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
@@ -133,7 +131,7 @@ export default function OpenBidForUserPage() {
     ? items.filter(
         (item) =>
           (item.title ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
-          (item.userCode ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
+          (item.username ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
           (item.externalId ?? '').toLowerCase().includes(filterUser.toLowerCase()) ||
           String(item.id).includes(filterUser)
       )
@@ -143,7 +141,6 @@ export default function OpenBidForUserPage() {
     setModalOpen(true)
     setFormError('')
     setUrl('')
-    setUserCode('')
     setFirstBidPrice('')
   }
 
@@ -151,7 +148,6 @@ export default function OpenBidForUserPage() {
     setModalOpen(false)
     setFormError('')
     setUrl('')
-    setUserCode('')
     setFirstBidPrice('')
   }
 
@@ -249,7 +245,7 @@ export default function OpenBidForUserPage() {
             type="text"
             value={filterUser}
             onChange={(e) => setFilterUser(e.target.value)}
-            placeholder="Search by title, user ID or user code..."
+            placeholder="ค้นหาตามชื่อสินค้า, User Name หรือ User ID..."
             className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-card-border bg-white text-sm
                        placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-shadow"
           />
@@ -267,7 +263,7 @@ export default function OpenBidForUserPage() {
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">User ID</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">User Code</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">User Name</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Product</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">Auction URL</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">Current Bid</th>
@@ -275,6 +271,7 @@ export default function OpenBidForUserPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">End Time</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24 whitespace-nowrap">Status</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Note</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">Register URL</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Actions</th>
                 </tr>
               </thead>
@@ -291,7 +288,7 @@ export default function OpenBidForUserPage() {
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-36">
                       <span className="inline-flex items-center rounded-lg bg-sakura-100 px-2.5 py-1 font-mono text-xs font-semibold text-sakura-800">
-                        {item.userCode ?? '-'}
+                        {item.username ?? '-'}
                       </span>
                     </td>
                     <td className="px-6 py-5 align-middle">
@@ -406,6 +403,22 @@ export default function OpenBidForUserPage() {
                         </button>
                       )}
                     </td>
+                    <td className="px-6 py-5 align-middle text-center w-36">
+                      {item.register_url ? (
+                        <a
+                          href={item.register_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={item.register_url}
+                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700 hover:underline text-xs font-medium"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                          Link
+                        </a>
+                      ) : (
+                        <span className="text-muted">-</span>
+                      )}
+                    </td>
                     <td className="px-6 py-5 align-middle text-center">
                       <span className="text-muted">—</span>
                     </td>
@@ -413,7 +426,7 @@ export default function OpenBidForUserPage() {
                 ))}
                 {filtered.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={10} className="px-6 py-16 text-center align-middle">
+                    <td colSpan={11} className="px-6 py-16 text-center align-middle">
                       <p className="text-sakura-500 font-medium">
                         {filterUser ? `No bids found for "${filterUser}"` : 'No data'}
                       </p>
@@ -479,20 +492,6 @@ export default function OpenBidForUserPage() {
                   />
                 </div>
                 <p className="mt-1.5 text-xs text-muted">รองรับ Yahoo Auctions Japan</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-sakura-900 mb-1.5">ชื่อผู้ใช้งาน</label>
-                <input
-                  type="text"
-                  value={userCode}
-                  onChange={(e) => setUserCode(e.target.value)}
-                  placeholder="เช่น ADMIN001"
-                  className="w-full px-4 py-3 rounded-xl border border-card-border
-                             bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
-                             focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent
-                             transition-all"
-                />
               </div>
 
               <div>
