@@ -52,7 +52,9 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         <ul className="space-y-1">
-          {NAV_ITEMS.map(({ href, label, icon: Icon, hasSubmenu }) => {
+          {NAV_ITEMS.map((item) => {
+            const { href, label, icon: Icon } = item
+            const hasSubmenu = 'hasSubmenu' in item && item.hasSubmenu
             if (hasSubmenu && href === '/auctions') {
               const isOpen = auctionOpen
               return (
