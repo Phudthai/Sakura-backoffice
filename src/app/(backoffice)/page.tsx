@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { MOCK_STATS, MOCK_ORDERS } from "@/lib/backoffice-mock";
 import { formatPrice } from "@/lib/utils";
+import { formatDateBangkok } from "@/lib/date-utils";
 
 const STATUS_BADGE: Record<string, string> = {
   PENDING_PAYMENT: "bg-yellow-100 text-yellow-800",
@@ -132,11 +133,7 @@ export default function DashboardPage() {
                     ฿{formatPrice(order.totalTHB)}
                   </td>
                   <td className="px-5 py-3 text-muted-dark">
-                    {new Date(order.createdAt).toLocaleDateString("th-TH", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
+                    {formatDateBangkok(order.createdAt)}
                   </td>
                 </tr>
               ))}

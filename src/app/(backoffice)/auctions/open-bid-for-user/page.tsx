@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import Image from 'next/image'
-import { ExternalLink, Search, Loader2, Plus, Send, X, Link2, Pencil, Check } from 'lucide-react'
+import { ExternalLink, Search, Loader2, Plus, Send, X, Link2, Pencil, Check, TrendingUp, ChevronDown } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
 
 interface AuctionRequest {
@@ -79,7 +79,8 @@ function Countdown({ endISO }: { endISO?: string | null }) {
 
 async function submitToBackend(
   url: string,
-  firstBidPrice?: number
+  firstBidPrice?: number,
+  intl_shipping_type?: 'air' | 'sea'
 ): Promise<{ id: number; data: unknown }> {
   const res = await fetch(`${API_BACKOFFICE_PREFIX}/auction-requests`, {
     method: 'POST',
@@ -87,6 +88,7 @@ async function submitToBackend(
     body: JSON.stringify({
       url,
       firstBidPrice: firstBidPrice ? Number(firstBidPrice) : undefined,
+      intl_shipping_type: intl_shipping_type ?? undefined,
     }),
   })
   const json = await res.json()
@@ -104,18 +106,44 @@ export default function OpenBidForUserPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [url, setUrl] = useState('')
   const [firstBidPrice, setFirstBidPrice] = useState('')
+  const [intlShippingType, setIntlShippingType] = useState<'air' | 'sea'>('air')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
   const [editingNoteValue, setEditingNoteValue] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
+  const [biddingId, setBiddingId] = useState<number | null>(null)
+  const [staffs, setStaffs] = useState<{ id: number; name: string }[]>([])
+  const [bidModalItem, setBidModalItem] = useState<AuctionRequest | null>(null)
+  const [bidPrice, setBidPrice] = useState('')
+  const [bidModalStaff, setBidModalStaff] = useState('')
+  const [bidModalError, setBidModalError] = useState('')
+  const hasInitializedStaff = useRef(false)
 
   const fetchData = useCallback(async () => {
     try {
-      const bidsRes = await fetch(`${API_BACKOFFICE_PREFIX}/auction-requests?page=1&limit=20&status=pending`)
+      const [bidsRes, staffsRes] = await Promise.all([
+        fetch(`${API_BACKOFFICE_PREFIX}/auction-requests?page=1&limit=20&status=pending`, {
+          credentials: 'include',
+        }),
+        fetch(`${API_BACKOFFICE_PREFIX}/staffs`, { credentials: 'include' }),
+      ])
       const bidsJson = await bidsRes.json()
+      const staffsJson = await staffsRes.json()
+
       if (bidsJson.success) setItems(bidsJson.data ?? [])
       else setError(bidsJson.error?.message ?? 'Failed to load auction requests')
+
+      if (staffsJson.success) {
+        const list = (staffsJson.data ?? []).map((s: { id: number; name: string }) => ({
+          id: Number(s.id),
+          name: s.name ?? String(s.id),
+        }))
+        setStaffs(list)
+        if (list.length > 0 && !hasInitializedStaff.current) {
+          hasInitializedStaff.current = true
+        }
+      }
     } catch {
       setError('Network error')
     } finally {
@@ -142,6 +170,7 @@ export default function OpenBidForUserPage() {
     setFormError('')
     setUrl('')
     setFirstBidPrice('')
+    setIntlShippingType('air')
   }
 
   const handleCloseModal = () => {
@@ -149,6 +178,7 @@ export default function OpenBidForUserPage() {
     setFormError('')
     setUrl('')
     setFirstBidPrice('')
+    setIntlShippingType('air')
   }
 
   const startEditNote = (itemId: number, currentNote: string | null) => {
@@ -191,13 +221,68 @@ export default function OpenBidForUserPage() {
     }
   }
 
+  const openBidModal = (item: AuctionRequest) => {
+    const requestPrice = item.lastBid?.price ?? 0
+    const defaultPrice =
+      requestPrice > item.currentPrice ? requestPrice : item.currentPrice + 1
+    setBidModalItem(item)
+    setBidPrice(String(defaultPrice))
+    setBidModalStaff(staffs.length > 0 ? String(staffs[0].id) : '')
+    setBidModalError('')
+  }
+
+  const closeBidModal = () => {
+    setBidModalItem(null)
+    setBidPrice('')
+    setBidModalStaff('')
+    setBidModalError('')
+  }
+
+  const handleSubmitBid = async () => {
+    if (!bidModalItem) return
+    const price = Number(bidPrice.replace(/[^0-9]/g, ''))
+    const staffId = bidModalStaff ? Number(bidModalStaff) : 0
+    if (price <= bidModalItem.currentPrice) {
+      setBidModalError('ราคา Bid ต้องสูงกว่าราคาปัจจุบันอย่างน้อย 1 ¥')
+      return
+    }
+    if (staffId <= 0) {
+      setBidModalError('กรุณาเลือก Staff')
+      return
+    }
+    setBiddingId(bidModalItem.id)
+    setBidModalError('')
+    try {
+      const res = await fetch(
+        `${API_BACKOFFICE_PREFIX}/auction-requests/${bidModalItem.id}/bids`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ price, biddedBy: staffId }),
+          credentials: 'include',
+        }
+      )
+      const json = await res.json()
+      if (res.ok && json.success) {
+        closeBidModal()
+        fetchData()
+      } else {
+        setBidModalError(json.error?.message ?? 'Bid failed')
+      }
+    } catch {
+      setBidModalError('Network error')
+    } finally {
+      setBiddingId(null)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setFormError('')
     setIsSubmitting(true)
     try {
       const price = firstBidPrice ? Number(firstBidPrice.replace(/[^0-9]/g, '')) : undefined
-      await submitToBackend(url.trim(), price)
+      await submitToBackend(url.trim(), price, intlShippingType)
       handleCloseModal()
       fetchData()
     } catch (err) {
@@ -271,7 +356,7 @@ export default function OpenBidForUserPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">End Time</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24 whitespace-nowrap">Status</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Note</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">Register URL</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap bg-purple-100">Register URL</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Actions</th>
                 </tr>
               </thead>
@@ -403,7 +488,7 @@ export default function OpenBidForUserPage() {
                         </button>
                       )}
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-36">
+                    <td className="px-6 py-5 align-middle text-center w-36 bg-purple-100">
                       {item.register_url ? (
                         <a
                           href={item.register_url}
@@ -420,7 +505,28 @@ export default function OpenBidForUserPage() {
                       )}
                     </td>
                     <td className="px-6 py-5 align-middle text-center">
-                      <span className="text-muted">—</span>
+                      {(() => {
+                        const requestPrice = item.lastBid?.price ?? 0
+                        const showBid = requestPrice > 0 && requestPrice < item.currentPrice
+                        if (!showBid) return <span className="text-muted">—</span>
+                        const isBidding = biddingId === item.id
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => openBidModal(item)}
+                            disabled={isBidding}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 px-4 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {isBidding ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <TrendingUp className="h-4 w-4" />
+                            )}
+                            Bid
+                            <ChevronDown className="h-4 w-4 opacity-70" />
+                          </button>
+                        )
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -516,6 +622,21 @@ export default function OpenBidForUserPage() {
                 </p>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                  ประเภทการจัดส่ง
+                </label>
+                <select
+                  value={intlShippingType}
+                  onChange={(e) => setIntlShippingType(e.target.value as 'air' | 'sea')}
+                  className="w-full rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sakura-900 text-sm
+                             focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                >
+                  <option value="air">Air (ทางอากาศ)</option>
+                  <option value="sea">Sea (ทางเรือ)</option>
+                </select>
+              </div>
+
               <button
                 type="submit"
                 disabled={isSubmitting}
@@ -531,6 +652,122 @@ export default function OpenBidForUserPage() {
                 )}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bid Modal */}
+      {bidModalItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={closeBidModal}
+            aria-hidden="true"
+          />
+          <div className="relative z-10 w-full max-w-lg mx-4 bg-white rounded-2xl border border-card-border shadow-card p-6">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-lg font-bold text-sakura-900 flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-purple-600" />
+                ส่ง Bid
+              </h2>
+              <button
+                type="button"
+                onClick={closeBidModal}
+                className="rounded-lg p-1.5 text-muted hover:bg-sakura-100 hover:text-sakura-900 transition-colors"
+                aria-label="ปิด"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="mb-4 text-sm text-sakura-700 line-clamp-3">
+              {bidModalItem.title ?? '-'}
+            </p>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                ราคาปัจจุบัน
+              </label>
+              <div className="inline-flex items-center rounded-xl bg-sakura-100 px-4 py-2.5 font-bold text-sakura-900">
+                ¥{formatPrice(bidModalItem.currentPrice)}
+              </div>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                Staff <span className="text-red-400">*</span>
+              </label>
+              <select
+                value={bidModalStaff}
+                onChange={(e) => setBidModalStaff(e.target.value)}
+                className="w-full rounded-xl border border-card-border bg-white px-4 py-3 text-sm text-sakura-900
+                           focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-purple-300"
+              >
+                <option value="">Select staff...</option>
+                {staffs.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                ราคา Bid ของคุณ <span className="text-red-400">*</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">
+                  ¥
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={bidPrice}
+                  onChange={(e) => setBidPrice(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder={`มากกว่า ¥${formatPrice(bidModalItem.currentPrice)}`}
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                             bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                             focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-transparent"
+                />
+              </div>
+              <p className="mt-1.5 text-xs text-red-500">
+                * ราคา Bid ต้องสูงกว่าราคาปัจจุบันอย่างน้อย 1 ¥
+              </p>
+            </div>
+
+            {bidModalError && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-100 text-red-700 text-sm">
+                {bidModalError}
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={closeBidModal}
+                className="flex-1 rounded-xl border border-card-border px-4 py-3 text-sm font-medium text-sakura-700
+                           hover:bg-sakura-50 transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitBid}
+                disabled={biddingId === bidModalItem.id}
+                className="flex-1 rounded-xl bg-purple-600 px-4 py-3 text-sm font-semibold text-white
+                           hover:bg-purple-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+              >
+                {biddingId === bidModalItem.id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <TrendingUp className="h-4 w-4" />
+                    ส่ง Bid
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

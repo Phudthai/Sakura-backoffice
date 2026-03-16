@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Plus, X, Loader2 } from 'lucide-react'
 import type { Staff } from '@/types/backoffice'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import { formatDateBangkok } from '@/lib/date-utils'
 
 export default function StaffsPage() {
   const [staffs, setStaffs] = useState<Staff[]>([])
@@ -134,11 +135,7 @@ export default function StaffsPage() {
                     <td className="px-5 py-3 text-muted-dark text-xs font-mono">{staff.id}</td>
                     <td className="px-5 py-3 font-medium text-sakura-900">{staff.name}</td>
                     <td className="px-5 py-3 text-muted-dark">
-                      {new Date(staff.createdAt).toLocaleDateString('th-TH', {
-                        day: 'numeric',
-                        month: 'short',
-                        year: 'numeric',
-                      })}
+                      {formatDateBangkok(staff.createdAt)}
                     </td>
                   </tr>
                 ))}

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import { formatDateBangkok } from '@/lib/date-utils'
 import { Loader2 } from 'lucide-react'
 
 interface Customer {
@@ -125,11 +126,7 @@ export default function CustomersPage() {
                       )}
                     </td>
                     <td className="px-5 py-3 text-muted-dark">
-                      {new Date(customer.createdAt).toLocaleDateString('th-TH', {
-                        day: 'numeric',
-                        month: 'short',
-                        year: 'numeric',
-                      })}
+                      {formatDateBangkok(customer.createdAt)}
                     </td>
                   </tr>
                 ))}

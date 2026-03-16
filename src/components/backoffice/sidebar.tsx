@@ -17,6 +17,8 @@ import {
 const AUCTION_SUB_ITEMS = [
   { href: '/auctions/open-bid-for-user', label: 'เปิดประมูลสินค้าให้ลูกค้า' },
   { href: '/auctions/pending-bids', label: 'การประมูลที่รออนุมัติ' },
+  { href: '/auctions/completed', label: 'การประมูลที่สิ้นสุดแล้ว' },
+  { href: '/auctions/shipping-lots', label: 'ล็อตการจัดส่ง' },
 ] as const
 
 const NAV_ITEMS = [
