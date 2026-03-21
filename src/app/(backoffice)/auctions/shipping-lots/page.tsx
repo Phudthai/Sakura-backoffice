@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Swal from 'sweetalert2'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import { formatDateBangkok, toDateInputValueBangkok, dateStrToBangkokISO } from '@/lib/date-utils'
 import { Loader2, Plus, X, Pencil, Check } from 'lucide-react'
@@ -8,9 +9,11 @@ import { Loader2, Plus, X, Pencil, Check } from 'lucide-react'
 interface Lot {
   id: number
   lot_code: string
+  intl_shipping_type?: string
   start_lot_at: string
-  end_lot_at: string
+  end_lot_at: string | null
   arrive_at: string | null
+  is_arrived?: boolean
   auction_count?: number
   createdAt: string
   updatedAt: string
@@ -45,8 +48,49 @@ export default function ShippingLotsPage() {
   const [arriveAt, setArriveAt] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
+  const [togglingLotId, setTogglingLotId] = useState<number | null>(null)
 
   const limit = 20
+
+  const handleToggleIsArrived = async (lot: Lot) => {
+    const newValue = !lot.is_arrived
+    const { isConfirmed } = await Swal.fire({
+      title: newValue ? 'ทำเครื่องหมายถึงไทยแล้ว?' : 'ยกเลิกสถานะถึงแล้ว?',
+      text: newValue
+        ? `ยืนยันทำเครื่องหมาย Lot ${lot.lot_code} ว่าถึงไทยแล้ว`
+        : `ยืนยันยกเลิกสถานะ Lot ${lot.lot_code} ว่ายังไม่ถึงไทย`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'ยืนยัน',
+      cancelButtonText: 'ยกเลิก',
+    })
+    if (!isConfirmed) return
+
+    setTogglingLotId(lot.id)
+    try {
+      const res = await fetch(
+        `${API_BACKOFFICE_PREFIX}/lots/${lot.id}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_arrived: newValue }),
+          credentials: 'include',
+        }
+      )
+      const json = await res.json()
+      if (json.success) {
+        setLots((prev) =>
+          prev.map((l) => (l.id === lot.id ? { ...l, is_arrived: newValue } : l))
+        )
+      } else {
+        setError(json.error?.message ?? 'Failed to update')
+      }
+    } catch {
+      setError('Network error')
+    } finally {
+      setTogglingLotId(null)
+    }
+  }
 
   const fetchData = useCallback(async () => {
     try {
@@ -238,6 +282,9 @@ export default function ShippingLotsPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
                     วันถึงไทย
                   </th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28">
+                    ถึงแล้ว
+                  </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24">
                     จำนวนประมูล
                   </th>
@@ -267,6 +314,25 @@ export default function ShippingLotsPage() {
                       {formatDateBangkok(lot.arrive_at)}
                     </td>
                     <td className="px-6 py-5 align-middle text-center">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleIsArrived(lot)}
+                        disabled={togglingLotId === lot.id}
+                        title={lot.is_arrived ? 'ยกเลิกสถานะถึงแล้ว' : 'ทำเครื่องหมายถึงไทยแล้ว'}
+                        className={`inline-flex items-center justify-center w-9 h-9 rounded-lg border-2 transition-colors ${
+                          lot.is_arrived
+                            ? 'bg-emerald-500 border-emerald-600 text-white'
+                            : 'border-sakura-200 bg-white text-muted hover:border-sakura-300 hover:bg-sakura-50'
+                        } ${togglingLotId === lot.id ? 'opacity-60 cursor-not-allowed' : ''}`}
+                      >
+                        {togglingLotId === lot.id ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="h-4 w-4" strokeWidth={2.5} />
+                        )}
+                      </button>
+                    </td>
+                    <td className="px-6 py-5 align-middle text-center">
                       <span className="font-medium tabular-nums">
                         {lot.auction_count ?? 0}
                       </span>
@@ -285,7 +351,7 @@ export default function ShippingLotsPage() {
                 ))}
                 {lots.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center align-middle">
+                    <td colSpan={7} className="px-6 py-16 text-center align-middle">
                       <p className="text-sakura-500 font-medium">
                         ยังไม่มี lot
                       </p>

@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard,
-  ShoppingCart,
   Users,
   Gavel,
   Receipt,
@@ -28,7 +27,6 @@ const SLIP_SUB_ITEMS = [
 
 const NAV_ITEMS = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/orders', label: 'Orders', icon: ShoppingCart },
   { href: '/customers', label: 'Customers', icon: Users },
   { href: '/auctions', label: 'ประมูล', icon: Gavel, hasSubmenu: true },
   { href: '/slips', label: 'เช็คสลิป', icon: Receipt, hasSubmenu: true },

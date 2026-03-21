@@ -8,14 +8,17 @@ interface PendingSlip {
   receiptId: number
   userId: number
   user: { id: number; userCode: string; name: string; email: string }
-  month: number
-  year: number
-  transportType: 'sea' | 'air'
+  month: number | null
+  year: number | null
+  transportType: 'sea' | 'air' | null
+  purpose: string | null
   slipImageUrl: string
   amount: number
   status: string
   createdAt: string
 }
+
+const PURPOSE_DOMESTIC = 'DOMESTIC_SHIPPING'
 
 interface SlipsMeta {
   total: number
@@ -155,7 +158,9 @@ export default function SlipsPendingPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">สลิปรอตรวจสอบ</h1>
-          <p className="mt-1 text-sm text-muted">เปิดสลิป ตรวจสอบ และกรอกจำนวนเงิน จากนั้นกดอนุมัติหรือปฏิเสธ</p>
+          <p className="mt-1 text-sm text-muted">
+            เปิดสลิป ตรวจสอบและกรอกจำนวนเงิน — สลิป &quot;ค่าส่งในไทย&quot; จ่ายเฉพาะยอดค้างค่าส่งในไทยของลูกค้า
+          </p>
         </div>
         <span className="rounded-full bg-amber-50 px-4 py-1.5 text-sm font-semibold text-amber-700">
           {meta?.total ?? 0} รายการ
@@ -182,6 +187,7 @@ export default function SlipsPendingPage() {
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">ลูกค้า</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">ประเภทสลิป</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">เดือน/ปี</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">ประเภท</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">สลิป</th>
@@ -193,6 +199,7 @@ export default function SlipsPendingPage() {
                   const isApproving = approvingId === slip.receiptId
                   const isRejecting = rejectingId === slip.receiptId
                   const slipImgUrl = getSlipImageUrl(slip.slipImageUrl)
+                  const isDomestic = slip.purpose === PURPOSE_DOMESTIC
 
                   return (
                     <tr
@@ -207,14 +214,33 @@ export default function SlipsPendingPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 align-middle">
-                        {MONTH_NAMES[slip.month - 1]} {slip.year + 543}
+                        <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                          isDomestic ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-700'
+                        }`}>
+                          {isDomestic ? 'ค่าส่งในไทย' : 'รายเดือน'}
+                        </span>
                       </td>
                       <td className="px-6 py-4 align-middle">
-                        <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                          slip.transportType === 'air' ? 'bg-sky-100 text-sky-700' : 'bg-teal-100 text-teal-700'
-                        }`}>
-                          {slip.transportType === 'air' ? 'Air' : 'Sea'}
-                        </span>
+                        {isDomestic ? (
+                          <span className="text-muted">—</span>
+                        ) : slip.month != null && slip.year != null ? (
+                          `${MONTH_NAMES[slip.month - 1]} ${slip.year + 543}`
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 align-middle">
+                        {isDomestic ? (
+                          <span className="text-muted">—</span>
+                        ) : slip.transportType ? (
+                          <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                            slip.transportType === 'air' ? 'bg-sky-100 text-sky-700' : 'bg-teal-100 text-teal-700'
+                          }`}>
+                            {slip.transportType === 'air' ? 'Air' : 'Sea'}
+                          </span>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
                       </td>
                       <td className="px-6 py-4 align-middle">
                         {slipImgUrl ? (
@@ -239,6 +265,11 @@ export default function SlipsPendingPage() {
                         <div className="flex justify-center gap-2">
                           {isApproving ? (
                             <div className="flex flex-col gap-2 min-w-[200px]">
+                              {isDomestic && (
+                                <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200/60">
+                                  สลิปค่าส่งในไทย — ตรวจยอดค้างของ user ให้ตรงก่อนอนุมัติ
+                                </p>
+                              )}
                               <input
                                 type="number"
                                 value={approveAmount}
@@ -322,7 +353,7 @@ export default function SlipsPendingPage() {
                 })}
                 {slips.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={5} className="px-6 py-16 text-center align-middle">
+                    <td colSpan={6} className="px-6 py-16 text-center align-middle">
                       <p className="text-sakura-500 font-medium">ไม่มีสลิปรอตรวจสอบ</p>
                     </td>
                   </tr>
