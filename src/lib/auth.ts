@@ -7,7 +7,7 @@ import { cookies } from 'next/headers'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'sakura-dev-secret-change-in-production'
 const JWT_EXPIRES_IN = '7d'
-const COOKIE_NAME = 'sakura_token'
+const COOKIE_NAME = 'sakura_backoffice_token'
 const COOKIE_MAX_AGE = 7 * 24 * 60 * 60 // 7 days in seconds
 
 // ---------------------------------------------------------------------------

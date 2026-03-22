@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import Image from 'next/image'
-import { ExternalLink, Search, Loader2, Pencil, Check, X } from 'lucide-react'
+import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
 
 interface AuctionRequest {
@@ -72,12 +72,43 @@ const TABS: { id: ActiveTab; label: string }[] = [
   { id: 'arrived_th', label: 'สินค้าที่ถึงไทยแล้ว' },
 ]
 
-function buildAuctionQuery(tab: Exclude<ActiveTab, 'arrived_th'>): string {
-  const base = 'page=1&limit=20&status=completed'
-  if (tab === 'not_arrived') return `${base}&delivery_stage=0`
-  if (tab === 'air') return `${base}&delivery_stage=1&shipping_type=air`
-  if (tab === 'sea') return `${base}&delivery_stage=1&shipping_type=sea`
-  return base
+type AuctionListFilters = {
+  lotId?: number
+  intlOutstanding: boolean
+  overduePayment: boolean
+}
+
+/** Builds GET /api/backoffice/auction-requests query (combines with tab: status, delivery_stage, shipping_type). */
+function buildAuctionQuery(
+  tab: Exclude<ActiveTab, 'arrived_th'>,
+  filters: AuctionListFilters
+): string {
+  const params = new URLSearchParams()
+  params.set('page', '1')
+  params.set('limit', '20')
+  params.set('status', 'completed')
+  if (tab === 'not_arrived') params.set('delivery_stage', '0')
+  if (tab === 'air') {
+    params.set('delivery_stage', '1')
+    params.set('shipping_type', 'air')
+  }
+  if (tab === 'sea') {
+    params.set('delivery_stage', '1')
+    params.set('shipping_type', 'sea')
+  }
+  if (filters.lotId != null && !Number.isNaN(filters.lotId)) {
+    params.set('lot_id', String(filters.lotId))
+  }
+  if (filters.intlOutstanding) {
+    params.set('intl_outstanding', 'true')
+  }
+  if (filters.overduePayment) {
+    params.set('overdue_payment', 'true')
+  }
+  if (filters.intlOutstanding || filters.overduePayment) {
+    params.set('include_unpaid_customer_copy', 'true')
+  }
+  return params.toString()
 }
 
 export default function CompletedAuctionsPage() {
@@ -101,6 +132,10 @@ export default function CompletedAuctionsPage() {
   const [userItemsData, setUserItemsData] = useState<UserItemsResponse | null>(null)
   const [userItemsLoading, setUserItemsLoading] = useState(false)
   const [userItemsError, setUserItemsError] = useState('')
+  const [lotIdFilter, setLotIdFilter] = useState('')
+  const [intlOutstanding, setIntlOutstanding] = useState(false)
+  const [overduePayment, setOverduePayment] = useState(false)
+  const [unpaidCustomerCopy, setUnpaidCustomerCopy] = useState<string | null>(null)
 
   const isNotArrivedTab = activeTab === 'not_arrived'
   const isShippingTab = activeTab === 'air' || activeTab === 'sea'
@@ -110,6 +145,7 @@ export default function CompletedAuctionsPage() {
     setIsLoading(true)
     try {
       if (activeTab === 'arrived_th') {
+        setUnpaidCustomerCopy(null)
         const res = await fetch(
           `${API_BACKOFFICE_PREFIX}/domestic-shipping-queue?page=1&limit=20`,
           { credentials: 'include' }
@@ -118,21 +154,34 @@ export default function CompletedAuctionsPage() {
         if (json.success) setDomesticQueueItems(json.data ?? [])
         else setError(json.error?.message ?? 'Failed to load domestic shipping queue')
       } else {
-        const query = buildAuctionQuery(activeTab)
+        const lotNum = lotIdFilter.trim() ? parseInt(lotIdFilter.replace(/\D/g, ''), 10) : NaN
+        const query = buildAuctionQuery(activeTab, {
+          lotId: !Number.isNaN(lotNum) ? lotNum : undefined,
+          intlOutstanding,
+          overduePayment,
+        })
         const arRes = await fetch(
           `${API_BACKOFFICE_PREFIX}/auction-requests?${query}`,
           { credentials: 'include' }
         )
         const arJson = await arRes.json()
-        if (arJson.success) setItems(arJson.data ?? [])
-        else setError(arJson.error?.message ?? 'Failed to load completed auctions')
+        if (arJson.success) {
+          setItems(arJson.data ?? [])
+          const meta = arJson.meta as { unpaidCustomerCopy?: string } | undefined
+          setUnpaidCustomerCopy(
+            typeof meta?.unpaidCustomerCopy === 'string' ? meta.unpaidCustomerCopy : null
+          )
+        } else {
+          setUnpaidCustomerCopy(null)
+          setError(arJson.error?.message ?? 'Failed to load completed auctions')
+        }
       }
     } catch {
       setError('Network error')
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab])
+  }, [activeTab, lotIdFilter, intlOutstanding, overduePayment])
 
   useEffect(() => {
     fetchData()
@@ -358,6 +407,63 @@ export default function CompletedAuctionsPage() {
           </button>
         ))}
       </div>
+
+      {!isArrivedThTab && (
+        <div className="mb-4 flex flex-wrap items-end gap-4 rounded-xl border border-sakura-200/80 bg-white p-4 shadow-sm">
+          <div>
+            <label className="block text-xs font-medium text-sakura-600 mb-1">Lot ID</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={lotIdFilter}
+              onChange={(e) => setLotIdFilter(e.target.value.replace(/[^\d]/g, ''))}
+              placeholder="กรองตาม lot"
+              className="w-32 rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
+                         focus:outline-none focus:ring-2 focus:ring-indigo-200"
+            />
+          </div>
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={intlOutstanding}
+              onChange={(e) => setIntlOutstanding(e.target.checked)}
+              className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
+            />
+            <span className="text-sm text-sakura-800">ค้าง intl (สินค้าเต็ม + ขนส่งต่างประเทศ)</span>
+          </label>
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={overduePayment}
+              onChange={(e) => setOverduePayment(e.target.checked)}
+              className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
+            />
+            <span className="text-sm text-sakura-800">เลยกำหนดชำระ (Bangkok) และยังค้าง intl</span>
+          </label>
+          <p className="text-xs text-muted max-w-xs">
+            เมื่อเปิดฟิลเตอร์ค้างจ่าย จะขอรายชื่อลูกค้าใน meta อัตโนมัติ (ครบทั้งชุดที่ผ่านฟิลเตอร์)
+          </p>
+        </div>
+      )}
+
+      {unpaidCustomerCopy != null && unpaidCustomerCopy !== '' && !isArrivedThTab && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/90 p-4">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-sm font-semibold text-amber-900">รายชื่อลูกค้า (user_code, comma-separated)</p>
+            <button
+              type="button"
+              onClick={() => {
+                void navigator.clipboard.writeText(unpaidCustomerCopy)
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              คัดลอก
+            </button>
+          </div>
+          <p className="text-sm text-amber-950/90 break-all font-mono">{unpaidCustomerCopy}</p>
+        </div>
+      )}
 
       <div className="mb-5 flex items-center justify-between gap-4 flex-wrap">
         <div className="relative w-72">

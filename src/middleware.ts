@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 
 const JWT_SECRET =
   process.env.JWT_SECRET || "sakura-dev-secret-change-in-production";
-const COOKIE_NAME = "sakura_token";
+const COOKIE_NAME = "sakura_backoffice_token";
 
 function base64UrlDecode(str: string): string {
   let s = str.replace(/-/g, "+").replace(/_/g, "/");

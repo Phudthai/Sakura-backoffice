@@ -14,6 +14,7 @@ interface Lot {
   end_lot_at: string | null
   arrive_at: string | null
   is_arrived?: boolean
+  is_delayed?: boolean
   auction_count?: number
   createdAt: string
   updatedAt: string
@@ -46,11 +47,13 @@ export default function ShippingLotsPage() {
   const [startLotAt, setStartLotAt] = useState('')
   const [endLotAt, setEndLotAt] = useState('')
   const [arriveAt, setArriveAt] = useState('')
+  const [isDelayed, setIsDelayed] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
   const [togglingLotId, setTogglingLotId] = useState<number | null>(null)
 
   const limit = 20
+  const isAirTab = activeTab === 'air'
 
   const handleToggleIsArrived = async (lot: Lot) => {
     const newValue = !lot.is_arrived
@@ -124,6 +127,7 @@ export default function ShippingLotsPage() {
     setStartLotAt('')
     setEndLotAt('')
     setArriveAt('')
+    setIsDelayed(false)
     setFormError('')
     setModalOpen(true)
   }
@@ -134,6 +138,7 @@ export default function ShippingLotsPage() {
     setStartLotAt(toDateInputValueBangkok(lot.start_lot_at))
     setEndLotAt(toDateInputValueBangkok(lot.end_lot_at))
     setArriveAt(toDateInputValueBangkok(lot.arrive_at))
+    setIsDelayed(lot.is_delayed ?? false)
     setFormError('')
     setModalOpen(true)
   }
@@ -164,12 +169,13 @@ export default function ShippingLotsPage() {
 
     setIsSubmitting(true)
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         lot_code: code,
         start_lot_at: dateStrToBangkokISO(startLotAt),
         end_lot_at: dateStrToBangkokISO(endLotAt, true),
         arrive_at: arriveAt ? dateStrToBangkokISO(arriveAt) : null,
       }
+      body.is_delayed = isAirTab ? isDelayed : false
 
       if (editingLot) {
         const res = await fetch(
@@ -282,6 +288,11 @@ export default function ShippingLotsPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
                     วันถึงไทย
                   </th>
+                  {isAirTab && (
+                    <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24">
+                      ล่าช้า
+                    </th>
+                  )}
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28">
                     ถึงแล้ว
                   </th>
@@ -313,6 +324,17 @@ export default function ShippingLotsPage() {
                     <td className="px-6 py-5 align-middle text-center">
                       {formatDateBangkok(lot.arrive_at)}
                     </td>
+                    {isAirTab && (
+                      <td className="px-6 py-5 align-middle text-center">
+                        {lot.is_delayed ? (
+                          <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-900">
+                            ล่าช้า
+                          </span>
+                        ) : (
+                          <span className="text-muted text-xs">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-6 py-5 align-middle text-center">
                       <button
                         type="button"
@@ -351,7 +373,10 @@ export default function ShippingLotsPage() {
                 ))}
                 {lots.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={7} className="px-6 py-16 text-center align-middle">
+                    <td
+                      colSpan={isAirTab ? 8 : 7}
+                      className="px-6 py-16 text-center align-middle"
+                    >
                       <p className="text-sakura-500 font-medium">
                         ยังไม่มี lot
                       </p>
@@ -479,6 +504,18 @@ export default function ShippingLotsPage() {
                   className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
                 />
               </div>
+
+              {isAirTab && (
+                <label className="flex items-center gap-3 cursor-pointer rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={isDelayed}
+                    onChange={(e) => setIsDelayed(e.target.checked)}
+                    className="h-4 w-4 rounded border-sakura-300 text-indigo-600 focus:ring-sakura-400"
+                  />
+                  <span className="text-sm font-medium text-sakura-900">ล่าช้า</span>
+                </label>
+              )}
 
               <button
                 type="submit"
