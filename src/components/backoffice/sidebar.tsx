@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
   BarChart3,
   Users,
   Gavel,
@@ -27,13 +26,12 @@ const SLIP_SUB_ITEMS = [
 ] as const;
 
 const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/overview", label: "Overview", icon: BarChart3 },
-  { href: "/customers", label: "Customers", icon: Users },
+  { href: "/overview", label: "เช็คภาพรวม", icon: BarChart3 },
   { href: "/auctions", label: "ประมูล", icon: Gavel, hasSubmenu: true },
   { href: "/slips", label: "เช็คสลิป", icon: Receipt, hasSubmenu: true },
-  { href: "/staffs", label: "Staffs", icon: UserCog },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/customers", label: "รายชื่อลูกค้า", icon: Users },
+  { href: "/staffs", label: "รายชื่อพนักงาน", icon: UserCog },
+  { href: "/settings", label: "ตั้งค่า", icon: Settings },
 ] as const;
 
 export default function Sidebar() {
@@ -173,7 +171,7 @@ export default function Sidebar() {
             }
 
             const isActive =
-              href === "/" ? pathname === "/" : pathname.startsWith(href);
+              pathname === href || pathname.startsWith(`${href}/`);
 
             return (
               <li key={href}>

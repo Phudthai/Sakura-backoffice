@@ -63,7 +63,14 @@ interface UserItemsResponse {
   items: DomesticQueueItemDetail[]
 }
 
+/** Lot สำหรับ dropdown ฟิลเตอร์ — จาก GET /lots/grouped-by-shipping-type?shipping_type=&pending_domestic_shipping=true */
+interface ShippingLotOption {
+  id: number
+  lot_code: string
+}
+
 type ActiveTab = 'not_arrived' | 'air' | 'sea' | 'arrived_th'
+type ShippingTab = 'air' | 'sea'
 
 const TABS: { id: ActiveTab; label: string }[] = [
   { id: 'not_arrived', label: 'สินค้าที่ยังไม่ถึงบ้านญี่ปุ่น' },
@@ -96,17 +103,19 @@ function buildAuctionQuery(
     params.set('delivery_stage', '1')
     params.set('shipping_type', 'sea')
   }
-  if (filters.lotId != null && !Number.isNaN(filters.lotId)) {
-    params.set('lot_id', String(filters.lotId))
-  }
-  if (filters.intlOutstanding) {
-    params.set('intl_outstanding', 'true')
-  }
-  if (filters.overduePayment) {
-    params.set('overdue_payment', 'true')
-  }
-  if (filters.intlOutstanding || filters.overduePayment) {
-    params.set('include_unpaid_customer_copy', 'true')
+  if (tab === 'air' || tab === 'sea') {
+    if (filters.lotId != null && !Number.isNaN(filters.lotId)) {
+      params.set('lot_id', String(filters.lotId))
+    }
+    if (filters.intlOutstanding) {
+      params.set('intl_outstanding', 'true')
+    }
+    if (filters.overduePayment) {
+      params.set('overdue_payment', 'true')
+    }
+    if (filters.intlOutstanding || filters.overduePayment) {
+      params.set('include_unpaid_customer_copy', 'true')
+    }
   }
   return params.toString()
 }
@@ -132,7 +141,21 @@ export default function CompletedAuctionsPage() {
   const [userItemsData, setUserItemsData] = useState<UserItemsResponse | null>(null)
   const [userItemsLoading, setUserItemsLoading] = useState(false)
   const [userItemsError, setUserItemsError] = useState('')
-  const [lotIdFilter, setLotIdFilter] = useState('')
+  /** กรอง lot แยกแท็บจัดส่ง air / sea — ค่าเป็นสตริง id หรือ '' */
+  const [lotIdByTab, setLotIdByTab] = useState<Record<ShippingTab, string>>({
+    air: '',
+    sea: '',
+  })
+  /** debounce ก่อนส่ง lot_id ไป auction-requests */
+  const [debouncedLotByTab, setDebouncedLotByTab] = useState<Record<ShippingTab, string>>({
+    air: '',
+    sea: '',
+  })
+  const [shippingLotsByTab, setShippingLotsByTab] = useState<{
+    air: ShippingLotOption[]
+    sea: ShippingLotOption[]
+  }>({ air: [], sea: [] })
+  const [loadingShippingLots, setLoadingShippingLots] = useState(false)
   const [intlOutstanding, setIntlOutstanding] = useState(false)
   const [overduePayment, setOverduePayment] = useState(false)
   const [unpaidCustomerCopy, setUnpaidCustomerCopy] = useState<string | null>(null)
@@ -140,6 +163,78 @@ export default function CompletedAuctionsPage() {
   const isNotArrivedTab = activeTab === 'not_arrived'
   const isShippingTab = activeTab === 'air' || activeTab === 'sea'
   const isArrivedThTab = activeTab === 'arrived_th'
+
+  useEffect(() => {
+    const t = setTimeout(
+      () => setDebouncedLotByTab((prev) => ({ ...prev, air: lotIdByTab.air })),
+      350
+    )
+    return () => clearTimeout(t)
+  }, [lotIdByTab.air])
+
+  useEffect(() => {
+    const t = setTimeout(
+      () => setDebouncedLotByTab((prev) => ({ ...prev, sea: lotIdByTab.sea })),
+      350
+    )
+    return () => clearTimeout(t)
+  }, [lotIdByTab.sea])
+
+  useEffect(() => {
+    if (activeTab !== 'air' && activeTab !== 'sea') return
+    const shipTab = activeTab
+    let cancelled = false
+    setLoadingShippingLots(true)
+    void (async () => {
+      try {
+        const groupedParams = new URLSearchParams()
+        groupedParams.set('shipping_type', shipTab)
+        groupedParams.set('pending_domestic_shipping', 'true')
+        const res = await fetch(
+          `${API_BACKOFFICE_PREFIX}/lots/grouped-by-shipping-type?${groupedParams.toString()}`,
+          { credentials: 'include' }
+        )
+        const json = await res.json()
+        if (cancelled) return
+        if (json.success && json.data) {
+          const raw: unknown[] =
+            shipTab === 'air' ? json.data.air ?? [] : json.data.sea ?? []
+          const list: ShippingLotOption[] = raw.map((row) => {
+            const r = row as { id: number; lot_code: string }
+            return { id: r.id, lot_code: r.lot_code }
+          })
+          setShippingLotsByTab((prev) => ({ ...prev, [shipTab]: list }))
+        } else {
+          setShippingLotsByTab((prev) => ({ ...prev, [shipTab]: [] }))
+        }
+      } catch {
+        if (!cancelled) {
+          setShippingLotsByTab((prev) => ({ ...prev, [shipTab]: [] }))
+        }
+      } finally {
+        if (!cancelled) setLoadingShippingLots(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab])
+
+  /** ถ้าเลือก lot ที่ไม่มีในรายการหลังโหลด — เคลียร์ */
+  useEffect(() => {
+    if (activeTab !== 'air' && activeTab !== 'sea') return
+    const tab = activeTab
+    const list = shippingLotsByTab[tab]
+    if (list.length === 0) return
+    setLotIdByTab((prev) => {
+      const idStr = prev[tab]
+      if (!idStr) return prev
+      const id = parseInt(idStr, 10)
+      if (Number.isNaN(id)) return prev
+      if (list.some((l) => l.id === id)) return prev
+      return { ...prev, [tab]: '' }
+    })
+  }, [activeTab, shippingLotsByTab])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -154,7 +249,15 @@ export default function CompletedAuctionsPage() {
         if (json.success) setDomesticQueueItems(json.data ?? [])
         else setError(json.error?.message ?? 'Failed to load domestic shipping queue')
       } else {
-        const lotNum = lotIdFilter.trim() ? parseInt(lotIdFilter.replace(/\D/g, ''), 10) : NaN
+        const lotStr =
+          activeTab === 'air'
+            ? debouncedLotByTab.air
+            : activeTab === 'sea'
+              ? debouncedLotByTab.sea
+              : ''
+        const lotNum = lotStr.trim()
+          ? parseInt(lotStr.replace(/\D/g, ''), 10)
+          : NaN
         const query = buildAuctionQuery(activeTab, {
           lotId: !Number.isNaN(lotNum) ? lotNum : undefined,
           intlOutstanding,
@@ -181,7 +284,7 @@ export default function CompletedAuctionsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [activeTab, lotIdFilter, intlOutstanding, overduePayment])
+  }, [activeTab, debouncedLotByTab.air, debouncedLotByTab.sea, intlOutstanding, overduePayment])
 
   useEffect(() => {
     fetchData()
@@ -408,19 +511,31 @@ export default function CompletedAuctionsPage() {
         ))}
       </div>
 
-      {!isArrivedThTab && (
+      {isShippingTab && (
         <div className="mb-4 flex flex-wrap items-end gap-4 rounded-xl border border-sakura-200/80 bg-white p-4 shadow-sm">
           <div>
-            <label className="block text-xs font-medium text-sakura-600 mb-1">Lot ID</label>
-            <input
-              type="text"
-              inputMode="numeric"
-              value={lotIdFilter}
-              onChange={(e) => setLotIdFilter(e.target.value.replace(/[^\d]/g, ''))}
-              placeholder="กรองตาม lot"
-              className="w-32 rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
-                         focus:outline-none focus:ring-2 focus:ring-indigo-200"
-            />
+            <label className="block text-xs font-medium text-sakura-600 mb-1">
+              Lot {activeTab === 'air' ? '(Air)' : '(Sea)'}
+            </label>
+            <select
+              value={lotIdByTab[activeTab as ShippingTab]}
+              onChange={(e) =>
+                setLotIdByTab((prev) => ({
+                  ...prev,
+                  [activeTab as ShippingTab]: e.target.value,
+                }))
+              }
+              disabled={loadingShippingLots}
+              className="min-w-[10rem] max-w-xs rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
+                         focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60"
+            >
+              <option value="">ทั้งหมด</option>
+              {shippingLotsByTab[activeTab as ShippingTab].map((lot) => (
+                <option key={lot.id} value={String(lot.id)}>
+                  {lot.lot_code}
+                </option>
+              ))}
+            </select>
           </div>
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
@@ -446,7 +561,7 @@ export default function CompletedAuctionsPage() {
         </div>
       )}
 
-      {unpaidCustomerCopy != null && unpaidCustomerCopy !== '' && !isArrivedThTab && (
+      {isShippingTab && unpaidCustomerCopy != null && unpaidCustomerCopy !== '' && (
         <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50/90 p-4">
           <div className="flex items-center justify-between gap-2 mb-2">
             <p className="text-sm font-semibold text-amber-900">รายชื่อลูกค้า (user_code, comma-separated)</p>
@@ -524,16 +639,16 @@ export default function CompletedAuctionsPage() {
                   {isArrivedThTab ? (
                     <>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
-                        User ID
+                        รหัสผู้ใช้
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
-                        User Name
+                        ชื่อผู้ใช้
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
                         จำนวนสินค้า
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                        Lot
+                        ล็อต
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-44 whitespace-nowrap bg-teal-50">
                         ค่าจัดส่งในประเทศ
@@ -542,30 +657,30 @@ export default function CompletedAuctionsPage() {
                   ) : (
                     <>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
-                        User ID
+                        รหัสผู้ใช้
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
-                        User Name
+                        ชื่อผู้ใช้
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-48">
-                        Product
+                        สินค้า
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                        Auction URL
+                        ลิงก์ประมูล
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        Current Bid
+                        ราคาปัจจุบัน
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        Request Bid
+                        ราคาที่ขอ
                       </th>
                       {isShippingTab && (
                         <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                          Lot
+                          ล็อต
                         </th>
                       )}
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                        Note
+                        หมายเหตุ
                       </th>
                       {isNotArrivedTab && (
                         <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap bg-purple-100">
@@ -907,7 +1022,7 @@ export default function CompletedAuctionsPage() {
                   รายการสินค้า — {selectedUserForItems?.username ?? selectedUserForItems?.userCode ?? '-'}
                 </h2>
                 <p className="text-sm text-muted mt-0.5">
-                  User ID: {selectedUserForItems?.userCode ?? '-'} · จำนวน {userItemsData?.items?.length ?? selectedUserForItems?.pendingDomesticItemCount ?? 0} ชิ้น
+                  รหัสผู้ใช้: {selectedUserForItems?.userCode ?? '-'} · จำนวน {userItemsData?.items?.length ?? selectedUserForItems?.pendingDomesticItemCount ?? 0} ชิ้น
                   {userItemsData != null && (
                     <span className="ml-2">
                       · ค่าจัดส่งในประเทศ ฿{formatPrice(userItemsData.domesticPendingBaht ?? 0)}

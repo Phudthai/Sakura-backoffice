@@ -297,34 +297,34 @@ export default function PendingBidsPage() {
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
-                    User ID
+                    รหัสผู้ใช้
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
-                    User Name
+                    ชื่อผู้ใช้
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">
-                    Product
+                    สินค้า
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
-                    Auction URL
+                    ลิงก์ประมูล
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">
-                    Current Bid
+                    ราคาปัจจุบัน
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">
-                    Request Bid
+                    ราคาที่ขอ
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">
-                    End Time
+                    เวลาสิ้นสุด
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24 whitespace-nowrap">
-                    Status
+                    สถานะ
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">
-                    Note
+                    หมายเหตุ
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">
-                    Actions
+                    การดำเนินการ
                   </th>
                 </tr>
               </thead>

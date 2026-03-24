@@ -91,20 +91,20 @@ export default function DashboardPage() {
       <div className="rounded-xl border border-card-border bg-white shadow-card">
         <div className="border-b border-card-border px-5 py-4">
           <h2 className="text-sm font-semibold text-sakura-900">
-            Recent Orders
+            คำสั่งซื้อล่าสุด
           </h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-card-border text-left text-xs text-muted-dark">
-                <th className="px-5 py-3 font-medium">Order #</th>
-                <th className="px-5 py-3 font-medium">Customer</th>
-                <th className="px-5 py-3 font-medium">Status</th>
+                <th className="px-5 py-3 font-medium">เลขที่คำสั่ง</th>
+                <th className="px-5 py-3 font-medium">ลูกค้า</th>
+                <th className="px-5 py-3 font-medium">สถานะ</th>
                 <th className="px-5 py-3 font-medium text-right">
-                  Total (THB)
+                  ยอดรวม (บาท)
                 </th>
-                <th className="px-5 py-3 font-medium">Date</th>
+                <th className="px-5 py-3 font-medium">วันที่</th>
               </tr>
             </thead>
             <tbody>

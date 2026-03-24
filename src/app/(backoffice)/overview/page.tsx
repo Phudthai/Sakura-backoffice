@@ -73,7 +73,7 @@ export default function OverviewPage() {
     setGroupedError('')
     try {
       const res = await fetch(
-        `${API_BACKOFFICE_PREFIX}/lots/grouped-by-shipping-type`,
+        `${API_BACKOFFICE_PREFIX}/lots/grouped-by-shipping-type?shipping_type=${activeTab}`,
         { credentials: 'include' }
       )
       const json = await res.json()
@@ -92,7 +92,7 @@ export default function OverviewPage() {
     } finally {
       setLoadingLots(false)
     }
-  }, [])
+  }, [activeTab])
 
   const fetchStats = useCallback(
     async (lotId: LotSelectValue, tabForReset: OverviewTab) => {
@@ -156,23 +156,17 @@ export default function OverviewPage() {
     return [...list].sort((a, b) => b.id - a.id)
   }, [grouped, activeTab])
 
+  /** ตรวจเฉพาะแท็บที่เปิด — เมื่อส่ง shipping_type แล้วอีกกลุ่มเป็น [] จะไม่เคลียร์ lot ของอีกแท็บ */
   useEffect(() => {
     if (!grouped) return
     setLotFilter((prev) => {
-      const next = { ...prev }
-      let changed = false
-      ;(['air', 'sea'] as const).forEach((tab) => {
-        const id = prev[tab]
-        if (id === '') return
-        const list = tab === 'air' ? grouped.air : grouped.sea
-        if (!list.some((l) => l.id === id)) {
-          next[tab] = ''
-          changed = true
-        }
-      })
-      return changed ? next : prev
+      const id = prev[activeTab]
+      if (id === '') return prev
+      const list = activeTab === 'air' ? grouped.air : grouped.sea
+      if (list.some((l) => l.id === id)) return prev
+      return { ...prev, [activeTab]: '' }
     })
-  }, [grouped])
+  }, [grouped, activeTab])
 
   const formatBaht = (n: number) => `฿${formatPrice(n)}`
 

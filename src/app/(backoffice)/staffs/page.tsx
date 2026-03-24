@@ -121,9 +121,9 @@ export default function StaffsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-card-border text-left text-xs text-muted-dark bg-sakura-50">
-                  <th className="px-5 py-3 font-medium">ID</th>
-                  <th className="px-5 py-3 font-medium">Name</th>
-                  <th className="px-5 py-3 font-medium">Created</th>
+                  <th className="px-5 py-3 font-medium">รหัส</th>
+                  <th className="px-5 py-3 font-medium">ชื่อ</th>
+                  <th className="px-5 py-3 font-medium">วันที่สร้าง</th>
                 </tr>
               </thead>
               <tbody>

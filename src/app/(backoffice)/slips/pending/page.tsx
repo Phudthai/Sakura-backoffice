@@ -19,6 +19,17 @@ interface PendingSlip {
 }
 
 const PURPOSE_DOMESTIC = 'DOMESTIC_SHIPPING'
+/** สลิปเติมเงินกระเป๋า — API อาจส่ง `WALLET_TOPUP` หรือ `wallet` */
+const PURPOSE_WALLET = 'wallet'
+const PURPOSE_WALLET_TOPUP = 'WALLET_TOPUP'
+
+function isWalletSlipPurpose(purpose: string | null): boolean {
+  if (!purpose) return false
+  const p = purpose.trim()
+  if (p === PURPOSE_WALLET || p === PURPOSE_WALLET_TOPUP) return true
+  const lower = p.toLowerCase()
+  return lower === 'wallet' || lower === PURPOSE_WALLET_TOPUP.toLowerCase()
+}
 
 interface SlipsMeta {
   total: number
@@ -158,8 +169,10 @@ export default function SlipsPendingPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">สลิปรอตรวจสอบ</h1>
-          <p className="mt-1 text-sm text-muted">
-            เปิดสลิป ตรวจสอบและกรอกจำนวนเงิน — สลิป &quot;ค่าส่งในไทย&quot; จ่ายเฉพาะยอดค้างค่าส่งในไทยของลูกค้า
+          <p className="mt-1 text-sm text-muted max-w-3xl">
+            เปิดสลิป ตรวจสอบและกรอกจำนวนเงินที่โอนจริง (บาท) ก่อนอนุมัติ — สลิปค่าส่งในไทยใช้กับยอดค้างค่าส่งในประเทศ
+            {' '}
+            สลิปเติมเงินเข้าวอลเลต: staff สร้างคำสั่งเติมเงิน (WALLET_TOPUP) ผ่านระบบก่อน ลูกค้าอัปโหลดสลิป (purpose=WALLET_TOPUP) แล้วอนุมัติที่นี่ด้วยยอดโอนจริง
           </p>
         </div>
         <span className="rounded-full bg-amber-50 px-4 py-1.5 text-sm font-semibold text-amber-700">
@@ -191,7 +204,7 @@ export default function SlipsPendingPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">เดือน/ปี</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">ประเภท</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle">สลิป</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">Actions</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">การดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -200,6 +213,7 @@ export default function SlipsPendingPage() {
                   const isRejecting = rejectingId === slip.receiptId
                   const slipImgUrl = getSlipImageUrl(slip.slipImageUrl)
                   const isDomestic = slip.purpose === PURPOSE_DOMESTIC
+                  const isWallet = isWalletSlipPurpose(slip.purpose)
 
                   return (
                     <tr
@@ -214,14 +228,24 @@ export default function SlipsPendingPage() {
                         </div>
                       </td>
                       <td className="px-6 py-4 align-middle">
-                        <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
-                          isDomestic ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-700'
-                        }`}>
-                          {isDomestic ? 'ค่าส่งในไทย' : 'รายเดือน'}
+                        <span
+                          className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
+                            isDomestic
+                              ? 'bg-amber-100 text-amber-800'
+                              : isWallet
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-indigo-100 text-indigo-700'
+                          }`}
+                        >
+                          {isDomestic
+                            ? 'ค่าส่งในไทย'
+                            : isWallet
+                              ? 'เติมเงินเข้าวอลเลต'
+                              : 'รายเดือน'}
                         </span>
                       </td>
                       <td className="px-6 py-4 align-middle">
-                        {isDomestic ? (
+                        {isDomestic || isWallet ? (
                           <span className="text-muted">—</span>
                         ) : slip.month != null && slip.year != null ? (
                           `${MONTH_NAMES[slip.month - 1]} ${slip.year + 543}`
@@ -230,7 +254,7 @@ export default function SlipsPendingPage() {
                         )}
                       </td>
                       <td className="px-6 py-4 align-middle">
-                        {isDomestic ? (
+                        {isDomestic || isWallet ? (
                           <span className="text-muted">—</span>
                         ) : slip.transportType ? (
                           <span className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${
@@ -268,6 +292,11 @@ export default function SlipsPendingPage() {
                               {isDomestic && (
                                 <p className="text-xs text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200/60">
                                   สลิปค่าส่งในไทย — ตรวจยอดค้างของ user ให้ตรงก่อนอนุมัติ
+                                </p>
+                              )}
+                              {isWallet && (
+                                <p className="text-xs text-emerald-900 bg-emerald-50 px-2 py-1 rounded border border-emerald-200/60">
+                                  เติมเงินเข้าวอลเลต — ตรวจยอดโอนจริงให้ตรงกับคำสั่งเติมเงิน (WALLET_TOPUP) ก่อนอนุมัติ
                                 </p>
                               )}
                               <input

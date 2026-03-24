@@ -73,14 +73,14 @@ export default function CustomersPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-card-border text-left text-xs text-muted-dark bg-sakura-50">
-                  <th className="px-5 py-3 font-medium">User Code</th>
-                  <th className="px-5 py-3 font-medium">User Name</th>
-                  <th className="px-5 py-3 font-medium">Name</th>
-                  <th className="px-5 py-3 font-medium">Email</th>
-                  <th className="px-5 py-3 font-medium">Phone</th>
-                  <th className="px-5 py-3 font-medium text-center">Active</th>
-                  <th className="px-5 py-3 font-medium text-center">Email Verified</th>
-                  <th className="px-5 py-3 font-medium">Registered</th>
+                  <th className="px-5 py-3 font-medium">รหัสผู้ใช้</th>
+                  <th className="px-5 py-3 font-medium">ชื่อผู้ใช้</th>
+                  <th className="px-5 py-3 font-medium">ชื่อ</th>
+                  <th className="px-5 py-3 font-medium">อีเมล</th>
+                  <th className="px-5 py-3 font-medium">เบอร์โทร</th>
+                  <th className="px-5 py-3 font-medium text-center">ใช้งาน</th>
+                  <th className="px-5 py-3 font-medium text-center">ยืนยันอีเมล</th>
+                  <th className="px-5 py-3 font-medium">วันที่สมัคร</th>
                 </tr>
               </thead>
               <tbody>

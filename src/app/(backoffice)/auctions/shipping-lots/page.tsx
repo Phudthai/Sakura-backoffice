@@ -277,7 +277,7 @@ export default function ShippingLotsPage() {
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-left w-40">
-                    Lot Code
+                    รหัสล็อต
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">
                     วันเริ่ม
@@ -300,7 +300,7 @@ export default function ShippingLotsPage() {
                     จำนวนประมูล
                   </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28">
-                    Actions
+                    การดำเนินการ
                   </th>
                 </tr>
               </thead>
