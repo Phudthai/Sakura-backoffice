@@ -2,6 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX, API_BASE_URL } from '@/lib/api-config'
+import {
+  getApiErrorMessage,
+  messageFromNonJsonBody,
+  parseResponseJsonOrText,
+} from '@/lib/api-error'
 import { Check, X, Loader2, ImageIcon } from 'lucide-react'
 
 interface PendingSlip {
@@ -70,12 +75,18 @@ export default function SlipsPendingPage() {
         `${API_BACKOFFICE_PREFIX}/slip-submissions/pending?page=${page}&limit=${limit}`,
         { credentials: 'include' }
       )
-      const json = await res.json()
-      if (json.success) {
+      const parsed = await parseResponseJsonOrText(res)
+      if (parsed.kind === 'text') {
+        setError(messageFromNonJsonBody(parsed.text, res.status))
+        return
+      }
+      const json = parsed.value as { success?: boolean; data?: PendingSlip[]; meta?: SlipsMeta }
+      if (res.ok && json.success) {
         setSlips(json.data ?? [])
         setMeta(json.meta ?? null)
+        setError('')
       } else {
-        setError(json.error?.message ?? 'Failed to load pending slips')
+        setError(getApiErrorMessage(json, 'โหลดรายการสลิปรอตรวจไม่สำเร็จ'))
       }
     } catch {
       setError('Network error')
@@ -101,6 +112,7 @@ export default function SlipsPendingPage() {
       setError('กรุณาระบุจำนวนเงินที่โอน')
       return
     }
+    setError('')
     setActionLoading(true)
     try {
       const res = await fetch(
@@ -112,12 +124,18 @@ export default function SlipsPendingPage() {
           credentials: 'include',
         }
       )
-      const json = await res.json()
-      if (json.success) {
+      const parsed = await parseResponseJsonOrText(res)
+      if (parsed.kind === 'text') {
+        setError(messageFromNonJsonBody(parsed.text, res.status))
+        return
+      }
+      const json = parsed.value as { success?: boolean }
+      if (res.ok && json.success) {
+        setError('')
         cancelAction()
         fetchData()
       } else {
-        setError(json.error?.message ?? 'Approve failed')
+        setError(getApiErrorMessage(json, 'อนุมัติไม่สำเร็จ'))
       }
     } catch {
       setError('Network error')
@@ -127,6 +145,7 @@ export default function SlipsPendingPage() {
   }
 
   const handleReject = async (receiptId: number) => {
+    setError('')
     setActionLoading(true)
     try {
       const res = await fetch(
@@ -138,12 +157,18 @@ export default function SlipsPendingPage() {
           credentials: 'include',
         }
       )
-      const json = await res.json()
-      if (json.success) {
+      const parsed = await parseResponseJsonOrText(res)
+      if (parsed.kind === 'text') {
+        setError(messageFromNonJsonBody(parsed.text, res.status))
+        return
+      }
+      const json = parsed.value as { success?: boolean }
+      if (res.ok && json.success) {
+        setError('')
         cancelAction()
         fetchData()
       } else {
-        setError(json.error?.message ?? 'Reject failed')
+        setError(getApiErrorMessage(json, 'ปฏิเสธสลิปไม่สำเร็จ'))
       }
     } catch {
       setError('Network error')
