@@ -1,7 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import {
+  postAuctionRequest,
+  submitBuyoutFlow,
+  type BuyoutFormTab,
+} from '@/lib/buyout-request'
 import Image from 'next/image'
 import { ExternalLink, Search, Loader2, Plus, Send, X, Link2, Pencil, Check, TrendingUp, ChevronDown } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
@@ -21,6 +27,7 @@ interface AuctionRequest {
   externalId?: string
   register_url?: string
   lastBid?: { price: number; status: string }
+  purchaseMode?: string
 }
 
 function useCountdown(endISO?: string | null) {
@@ -77,28 +84,44 @@ function Countdown({ endISO }: { endISO?: string | null }) {
   )
 }
 
-async function submitToBackend(
-  url: string,
-  firstBidPrice?: number,
-  intl_shipping_type?: 'air' | 'sea'
-): Promise<{ id: number; data: unknown }> {
-  const res = await fetch(`${API_BACKOFFICE_PREFIX}/auction-requests`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      url,
-      firstBidPrice: firstBidPrice ? Number(firstBidPrice) : undefined,
-      intl_shipping_type: intl_shipping_type ?? undefined,
-    }),
-  })
-  const json = await res.json()
-  if (!res.ok || !json.success) {
-    throw new Error(json.error?.message ?? 'บันทึกไม่สำเร็จ')
+type PurchaseMode = 'AUCTION' | 'BUYOUT'
+
+type IntlShippingChoice = 'air' | 'sea'
+
+/** ประมูลครั้งแรก: Yahoo / Mercari */
+type AuctionFormTab = 'yahoo' | 'mercari'
+
+async function submitAuctionFirstFlow(payload: {
+  auctionSource: AuctionFormTab
+  username: string
+  url: string
+  intl_shipping_type: 'air' | 'sea'
+  transferredYen?: number
+  openingBidYen?: number
+}): Promise<{ id: number; data: unknown }> {
+  const base: Record<string, unknown> = {
+    purchase_mode: 'AUCTION' as const,
+    auctionSource: payload.auctionSource,
+    url: payload.url.trim(),
+    intl_shipping_type: payload.intl_shipping_type,
+    username: payload.username.trim(),
   }
-  return { id: json.data.id, data: json.data }
+  if (payload.transferredYen != null && Number.isFinite(payload.transferredYen)) {
+    base.transferredYen = payload.transferredYen
+  }
+  if (payload.openingBidYen != null && Number.isFinite(payload.openingBidYen)) {
+    base.firstBidPrice = payload.openingBidYen
+  }
+  return postAuctionRequest(base)
 }
 
-export default function OpenBidForUserPage() {
+function OpenBidForUserPageContent() {
+  const searchParams = useSearchParams()
+
+  const purchaseModeFromUrl = useMemo((): PurchaseMode => {
+    return searchParams.get('purchase_mode') === 'BUYOUT' ? 'BUYOUT' : 'AUCTION'
+  }, [searchParams])
+
   const [items, setItems] = useState<AuctionRequest[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
@@ -106,7 +129,15 @@ export default function OpenBidForUserPage() {
   const [modalOpen, setModalOpen] = useState(false)
   const [url, setUrl] = useState('')
   const [firstBidPrice, setFirstBidPrice] = useState('')
-  const [intlShippingType, setIntlShippingType] = useState<'air' | 'sea'>('air')
+  const [intlShippingType, setIntlShippingType] = useState<IntlShippingChoice | null>(null)
+  const [username, setUsername] = useState('')
+  /** โอนมาแล้ว — จำนวนเงิน (เยน) */
+  const [transferredYen, setTransferredYen] = useState('')
+  const [buyoutTab, setBuyoutTab] = useState<BuyoutFormTab>('yahoo')
+  const [productTitle, setProductTitle] = useState('')
+  const [siteName, setSiteName] = useState('')
+  const [priceYen, setPriceYen] = useState('')
+  const [auctionTab, setAuctionTab] = useState<AuctionFormTab>('yahoo')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [formError, setFormError] = useState('')
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
@@ -123,7 +154,7 @@ export default function OpenBidForUserPage() {
   const fetchData = useCallback(async () => {
     try {
       const [bidsRes, staffsRes] = await Promise.all([
-        fetch(`${API_BACKOFFICE_PREFIX}/auction-requests?page=1&limit=20&status=pending`, {
+        fetch(`${API_BACKOFFICE_PREFIX}/purchase-requests?page=1&limit=20&status=pending`, {
           credentials: 'include',
         }),
         fetch(`${API_BACKOFFICE_PREFIX}/staffs`, { credentials: 'include' }),
@@ -170,7 +201,13 @@ export default function OpenBidForUserPage() {
     setFormError('')
     setUrl('')
     setFirstBidPrice('')
-    setIntlShippingType('air')
+    setIntlShippingType(null)
+    setUsername('')
+    setTransferredYen('')
+    setBuyoutTab('yahoo')
+    setProductTitle('')
+    setSiteName('')
+    setPriceYen('')
   }
 
   const handleCloseModal = () => {
@@ -178,7 +215,14 @@ export default function OpenBidForUserPage() {
     setFormError('')
     setUrl('')
     setFirstBidPrice('')
-    setIntlShippingType('air')
+    setIntlShippingType(null)
+    setUsername('')
+    setTransferredYen('')
+    setBuyoutTab('yahoo')
+    setProductTitle('')
+    setSiteName('')
+    setPriceYen('')
+    setAuctionTab('yahoo')
   }
 
   const startEditNote = (itemId: number, currentNote: string | null) => {
@@ -200,7 +244,7 @@ export default function OpenBidForUserPage() {
     }
     setNoteSaving(true)
     try {
-      const res = await fetch(`${API_BACKOFFICE_PREFIX}/auction-requests/${editingNoteId}/note`, {
+      const res = await fetch(`${API_BACKOFFICE_PREFIX}/purchase-requests/${editingNoteId}/note`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: value }),
@@ -254,7 +298,7 @@ export default function OpenBidForUserPage() {
     setBidModalError('')
     try {
       const res = await fetch(
-        `${API_BACKOFFICE_PREFIX}/auction-requests/${bidModalItem.id}/bids`,
+        `${API_BACKOFFICE_PREFIX}/purchase-requests/${bidModalItem.id}/bids`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -281,8 +325,115 @@ export default function OpenBidForUserPage() {
     setFormError('')
     setIsSubmitting(true)
     try {
-      const price = firstBidPrice ? Number(firstBidPrice.replace(/[^0-9]/g, '')) : undefined
-      await submitToBackend(url.trim(), price, intlShippingType)
+      if (intlShippingType === null) {
+        setFormError('กรุณาเลือกประเภทการจัดส่ง')
+        return
+      }
+      const shippingType = intlShippingType
+      if (purchaseModeFromUrl === 'BUYOUT') {
+        const uname = username.trim()
+        if (!uname) {
+          setFormError('กรุณากรอกชื่อผู้ใช้')
+          return
+        }
+        const u = url.trim()
+        if (!u) {
+          setFormError('กรุณากรอกลิงก์สินค้า')
+          return
+        }
+        const transferDigits = transferredYen.replace(/[^0-9]/g, '')
+        const transferAmount =
+          transferDigits === '' ? undefined : Number(transferDigits)
+        if (transferDigits !== '' && (transferAmount === undefined || transferAmount < 0)) {
+          setFormError('กรุณากรอกจำนวนเงินโอน (เยน) ให้ถูกต้อง')
+          return
+        }
+        if (buyoutTab === 'general_web') {
+          const pt = productTitle.trim()
+          const sn = siteName.trim()
+          const py = priceYen.replace(/[^0-9]/g, '')
+          if (!pt) {
+            setFormError('กรุณากรอกชื่อสินค้า')
+            return
+          }
+          if (!sn) {
+            setFormError('กรุณากรอกชื่อเว็บไซต์')
+            return
+          }
+          if (!py || Number(py) <= 0) {
+            setFormError('กรุณากรอกราคา (เยน) ให้ถูกต้อง')
+            return
+          }
+          await submitBuyoutFlow({
+            buyoutTab: 'general_web',
+            username: uname,
+            url: u,
+            transferredYen: transferAmount,
+            intl_shipping_type: shippingType,
+            productTitle: pt,
+            siteName: sn,
+            priceYen: Number(py),
+          })
+        } else {
+          await submitBuyoutFlow({
+            buyoutTab,
+            username: uname,
+            url: u,
+            transferredYen: transferAmount,
+            intl_shipping_type: shippingType,
+          })
+        }
+      } else {
+        const u = url.trim()
+        if (!u) {
+          setFormError('กรุณากรอกลิงก์สินค้า')
+          return
+        }
+        const transferDigits = transferredYen.replace(/[^0-9]/g, '')
+        const transferAmt =
+          transferDigits === '' ? undefined : Number(transferDigits)
+        const openingDigits = firstBidPrice.replace(/[^0-9]/g, '')
+        const openingAmt =
+          openingDigits === '' ? undefined : Number(openingDigits)
+
+        const uname = username.trim()
+        if (!uname) {
+          setFormError('กรุณากรอกผู้ใช้งาน')
+          return
+        }
+        if (transferDigits !== '' && (transferAmt === undefined || transferAmt < 0)) {
+          setFormError('กรุณากรอกโอนมาแล้ว (เยน) ให้ถูกต้อง')
+          return
+        }
+        if (
+          openingDigits !== '' &&
+          (openingAmt === undefined || openingAmt <= 0)
+        ) {
+          setFormError('กรุณากรอกราคาเปิดประมูล (เยน) ให้ถูกต้อง')
+          return
+        }
+        if (
+          (transferDigits === '' || transferAmt === undefined) &&
+          (openingDigits === '' || openingAmt === undefined)
+        ) {
+          setFormError('กรุณากรอกโอนมาแล้ว (เยน) หรือราคาเปิดประมูล (เยน) อย่างน้อยหนึ่งช่อง')
+          return
+        }
+        await submitAuctionFirstFlow({
+          auctionSource: auctionTab,
+          username: uname,
+          url: u,
+          intl_shipping_type: shippingType,
+          transferredYen:
+            transferDigits !== '' && transferAmt !== undefined
+              ? transferAmt
+              : undefined,
+          openingBidYen:
+            openingDigits !== '' && openingAmt !== undefined && openingAmt > 0
+              ? openingAmt
+              : undefined,
+        })
+      }
       handleCloseModal()
       fetchData()
     } catch (err) {
@@ -292,11 +443,21 @@ export default function OpenBidForUserPage() {
     }
   }
 
+  const pageTitle =
+    purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ปครั้งแรก' : 'ประมูลครั้งแรก'
+  const primaryActionLabel =
+    purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'Auction'
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">เปิดประมูลสินค้าให้ลูกค้า</h1>
+          <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">{pageTitle}</h1>
+          <p className="text-sm text-muted mt-1">
+            {purchaseModeFromUrl === 'BUYOUT'
+              ? 'สร้างคำขอซื้อทันที (BUYOUT) ให้ลูกค้า'
+              : 'เปิดการประมูล (AUCTION) ให้ลูกค้า'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <span className="rounded-full bg-indigo-50 px-4 py-1.5 text-sm font-semibold text-indigo-700">
@@ -308,7 +469,7 @@ export default function OpenBidForUserPage() {
             className="btn-gradient inline-flex items-center justify-center gap-2 px-5 py-2.5"
           >
             <Plus className="h-4 w-4" />
-            เปิดประมูล
+            {primaryActionLabel}
           </button>
         </div>
       </div>
@@ -354,6 +515,7 @@ export default function OpenBidForUserPage() {
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">ราคาปัจจุบัน</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">ราคาที่ขอ</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">เวลาสิ้นสุด</th>
+                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28 whitespace-nowrap">โหมด</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24 whitespace-nowrap">สถานะ</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">หมายเหตุ</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap bg-purple-100">ลิงก์ลงทะเบียน</th>
@@ -430,6 +592,11 @@ export default function OpenBidForUserPage() {
                     </td>
                     <td className="px-6 py-5 align-middle text-center">
                       <Countdown endISO={item.endTime} />
+                    </td>
+                    <td className="px-6 py-5 align-middle text-center w-28">
+                      <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
+                        {item.purchaseMode ?? '—'}
+                      </span>
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-24">
                       <span
@@ -532,12 +699,16 @@ export default function OpenBidForUserPage() {
                 ))}
                 {filtered.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={11} className="px-6 py-16 text-center align-middle">
+                    <td colSpan={12} className="px-6 py-16 text-center align-middle">
                       <p className="text-sakura-500 font-medium">
                         {filterUser ? `No bids found for "${filterUser}"` : 'No data'}
                       </p>
                       <p className="text-sm text-muted mt-1">
-                        {filterUser ? 'Try a different search term' : 'กดปุ่ม เปิดประมูล เพื่อเพิ่มรายการ'}
+                        {filterUser
+                          ? 'Try a different search term'
+                          : purchaseModeFromUrl === 'BUYOUT'
+                            ? 'กดปุ่มกดเว็ปเพื่อเพิ่มรายการ'
+                            : 'กดปุ่ม Auction เพื่อเพิ่มรายการ'}
                       </p>
                     </td>
                   </tr>
@@ -550,15 +721,19 @@ export default function OpenBidForUserPage() {
 
       {/* Modal */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/50"
             onClick={handleCloseModal}
             aria-hidden="true"
           />
-          <div className="relative z-10 w-full max-w-lg mx-4 bg-white rounded-2xl border border-card-border shadow-card p-6">
+          <div
+            className="relative z-10 w-full max-w-xl mx-4 bg-white rounded-2xl border border-card-border shadow-card p-6 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between mb-5">
-              <h2 className="text-lg font-bold text-sakura-900">เปิดประมูลสินค้า</h2>
+              <h2 className="text-lg font-bold text-sakura-900">
+                {purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'Auction'}
+              </h2>
               <button
                 type="button"
                 onClick={handleCloseModal}
@@ -578,80 +753,350 @@ export default function OpenBidForUserPage() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                  ลิงค์สินค้า <span className="text-red-400">*</span>
-                </label>
-                <div className="relative">
-                  <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
-                  <input
-                    type="url"
-                    required
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://auctions.yahoo.co.jp/jp/auction/..."
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
-                               bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
-                               focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent
-                               transition-all"
-                  />
+            {purchaseModeFromUrl === 'BUYOUT' ? (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="flex gap-1 p-1 rounded-xl bg-sakura-100/80 border border-sakura-200/60 w-full">
+                  <button
+                    type="button"
+                    onClick={() => setBuyoutTab('yahoo')}
+                    className={`flex-1 min-w-0 rounded-lg px-2 sm:px-3 py-2.5 text-xs sm:text-sm font-semibold transition-colors ${
+                      buyoutTab === 'yahoo'
+                        ? 'bg-white text-sakura-900 shadow-sm'
+                        : 'text-sakura-600 hover:text-sakura-900'
+                    }`}
+                  >
+                    Yahoo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBuyoutTab('mercari')}
+                    className={`flex-1 min-w-0 rounded-lg px-2 sm:px-3 py-2.5 text-xs sm:text-sm font-semibold transition-colors ${
+                      buyoutTab === 'mercari'
+                        ? 'bg-white text-sakura-900 shadow-sm'
+                        : 'text-sakura-600 hover:text-sakura-900'
+                    }`}
+                  >
+                    Mercari
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBuyoutTab('general_web')}
+                    className={`flex-1 min-w-0 rounded-lg px-2 sm:px-3 py-2.5 text-xs sm:text-sm font-semibold transition-colors ${
+                      buyoutTab === 'general_web'
+                        ? 'bg-white text-sakura-900 shadow-sm'
+                        : 'text-sakura-600 hover:text-sakura-900'
+                    }`}
+                  >
+                    เว็บทั่วไป
+                  </button>
                 </div>
-                <p className="mt-1.5 text-xs text-muted">รองรับ Yahoo Auctions Japan</p>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-sakura-900 mb-1.5">ราคา Bid ครั้งแรก</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ชื่อผู้ใช้ <span className="text-red-400">*</span>
+                  </label>
                   <input
                     type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={firstBidPrice}
-                    onChange={(e) => setFirstBidPrice(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="เช่น 50000"
-                    className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
-                               bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
-                               focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent
-                               transition-all"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="ชื่อผู้ใช้ลูกค้า"
+                    autoComplete="off"
+                    className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
                   />
                 </div>
-                <p className="mt-1.5 text-xs text-red-500">
-                  * กรุณาใส่ราคา Bid ขั้นต่ำมากกว่า 100 ¥ ของราคาสินค้าปัจจุบัน
-                </p>
-              </div>
 
-              <div>
-                <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                  ประเภทการจัดส่ง
-                </label>
-                <select
-                  value={intlShippingType}
-                  onChange={(e) => setIntlShippingType(e.target.value as 'air' | 'sea')}
-                  className="w-full rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sakura-900 text-sm
-                             focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
-                >
-                  <option value="air">Air (ทางอากาศ)</option>
-                  <option value="sea">Sea (ทางเรือ)</option>
-                </select>
-              </div>
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ลิงก์สินค้า <span className="text-red-400">*</span>
+                  </label>
+                  <div className="relative">
+                    <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                    <input
+                      type="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder={
+                        buyoutTab === 'yahoo'
+                          ? 'https://auctions.yahoo.co.jp/...'
+                          : buyoutTab === 'mercari'
+                            ? 'https://jp.mercari.com/...'
+                            : 'https://...'
+                      }
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                    />
+                  </div>
+                </div>
 
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="btn-gradient w-full flex items-center justify-center gap-2 py-3 text-base"
-              >
-                {isSubmitting ? (
-                  <span className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                ) : (
+                {buyoutTab === 'general_web' && (
                   <>
-                    <Send className="w-4 h-4" />
-                    ส่งลิงค์สินค้า
+                    <div>
+                      <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                        ชื่อสินค้า <span className="text-red-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={productTitle}
+                        onChange={(e) => setProductTitle(e.target.value)}
+                        className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
+                                   focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                        ชื่อเว็บไซต์ <span className="text-red-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={siteName}
+                        onChange={(e) => setSiteName(e.target.value)}
+                        className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
+                                   focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                        ราคา (เยน) <span className="text-red-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={priceYen}
+                          onChange={(e) => setPriceYen(e.target.value.replace(/[^0-9]/g, ''))}
+                          placeholder="เช่น 12000"
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                     bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                     focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                        />
+                      </div>
+                    </div>
                   </>
                 )}
-              </button>
-            </form>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    โอนมาแล้ว (เยน)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={transferredYen}
+                      onChange={(e) => setTransferredYen(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="จำนวนเงินที่โอน (ไม่บังคับ)"
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-muted">กรอกเป็นจำนวนเยน (¥) หากยังไม่โอนให้เว้นว่าง</p>
+                </div>
+
+                <fieldset className="space-y-2.5">
+                  <legend className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ประเภทการจัดส่ง <span className="text-red-400">*</span>
+                  </legend>
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:gap-4">
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sm text-sakura-900 transition-colors has-[:checked]:border-indigo-400 has-[:checked]:bg-indigo-50/60">
+                      <input
+                        type="radio"
+                        name="intl-shipping-buyout"
+                        value="air"
+                        checked={intlShippingType === 'air'}
+                        onChange={() => setIntlShippingType('air')}
+                        className="h-4 w-4 shrink-0 border-sakura-300 text-indigo-600 focus:ring-indigo-400"
+                      />
+                      <span>Air (ทางอากาศ)</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sm text-sakura-900 transition-colors has-[:checked]:border-indigo-400 has-[:checked]:bg-indigo-50/60">
+                      <input
+                        type="radio"
+                        name="intl-shipping-buyout"
+                        value="sea"
+                        checked={intlShippingType === 'sea'}
+                        onChange={() => setIntlShippingType('sea')}
+                        className="h-4 w-4 shrink-0 border-sakura-300 text-indigo-600 focus:ring-indigo-400"
+                      />
+                      <span>Sea (ทางเรือ)</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting || intlShippingType === null}
+                  className="btn-gradient w-full flex items-center justify-center gap-2 py-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                >
+                  {isSubmitting ? (
+                    <span className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      ส่งคำขอ
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="flex gap-1 p-1 rounded-xl bg-sakura-100/80 border border-sakura-200/60 w-full">
+                  <button
+                    type="button"
+                    onClick={() => setAuctionTab('yahoo')}
+                    className={`flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                      auctionTab === 'yahoo'
+                        ? 'bg-white text-sakura-900 shadow-sm'
+                        : 'text-sakura-600 hover:text-sakura-900'
+                    }`}
+                  >
+                    Yahoo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAuctionTab('mercari')}
+                    className={`flex-1 rounded-lg px-3 py-2.5 text-sm font-semibold transition-colors ${
+                      auctionTab === 'mercari'
+                        ? 'bg-white text-sakura-900 shadow-sm'
+                        : 'text-sakura-600 hover:text-sakura-900'
+                    }`}
+                  >
+                    Mercari
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ผู้ใช้งาน <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder={
+                      auctionTab === 'yahoo'
+                        ? 'ผู้ใช้งาน Yahoo Auctions'
+                        : 'ผู้ใช้งาน Mercari'
+                    }
+                    autoComplete="off"
+                    className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
+                               focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ลิงก์สินค้า <span className="text-red-400">*</span>
+                  </label>
+                  <div className="relative">
+                    <Link2 className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
+                    <input
+                      type="url"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      placeholder={
+                        auctionTab === 'yahoo'
+                          ? 'https://auctions.yahoo.co.jp/...'
+                          : 'https://jp.mercari.com/...'
+                      }
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    โอนมาแล้ว (เยน)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={transferredYen}
+                      onChange={(e) => setTransferredYen(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="จำนวนที่โอน (ไม่บังคับ)"
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ราคาเปิดประมูล (เยน)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={firstBidPrice}
+                      onChange={(e) => setFirstBidPrice(e.target.value.replace(/[^0-9]/g, ''))}
+                      placeholder="เช่น 5000 (ไม่บังคับ)"
+                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-muted">
+                    กรอกอย่างน้อยหนึ่งช่องระหว่างโอนมาแล้วกับราคาเปิดประมูล
+                  </p>
+                </div>
+
+                <fieldset className="space-y-2.5">
+                  <legend className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    ประเภทการจัดส่ง <span className="text-red-400">*</span>
+                  </legend>
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:gap-4">
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sm text-sakura-900 transition-colors has-[:checked]:border-indigo-400 has-[:checked]:bg-indigo-50/60">
+                      <input
+                        type="radio"
+                        name="intl-shipping-auction"
+                        value="air"
+                        checked={intlShippingType === 'air'}
+                        onChange={() => setIntlShippingType('air')}
+                        className="h-4 w-4 shrink-0 border-sakura-300 text-indigo-600 focus:ring-indigo-400"
+                      />
+                      <span>Air (ทางอากาศ)</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer rounded-xl border border-card-border bg-sakura-50/50 px-4 py-3 text-sm text-sakura-900 transition-colors has-[:checked]:border-indigo-400 has-[:checked]:bg-indigo-50/60">
+                      <input
+                        type="radio"
+                        name="intl-shipping-auction"
+                        value="sea"
+                        checked={intlShippingType === 'sea'}
+                        onChange={() => setIntlShippingType('sea')}
+                        className="h-4 w-4 shrink-0 border-sakura-300 text-indigo-600 focus:ring-indigo-400"
+                      />
+                      <span>Sea (ทางเรือ)</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting || intlShippingType === null}
+                  className="btn-gradient w-full flex items-center justify-center gap-2 py-3 text-base disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                >
+                  {isSubmitting ? (
+                    <span className="w-5 h-5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" />
+                      ส่งคำขอ
+                    </>
+                  )}
+                </button>
+              </form>
+            )}
           </div>
         </div>
       )}
@@ -772,5 +1217,19 @@ export default function OpenBidForUserPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function OpenBidForUserPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-24 text-muted">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      }
+    >
+      <OpenBidForUserPageContent />
+    </Suspense>
   )
 }

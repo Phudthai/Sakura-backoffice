@@ -1,9 +1,7 @@
 import type {
-  AdminOrder,
   AdminCustomer,
   AdminProduct,
   AdminAuction,
-  DashboardStats,
   Staff,
 } from "@/types/backoffice";
 
@@ -14,106 +12,6 @@ function hoursFromNow(hours: number): string {
 function img(seed: string, size = 300): string {
   return `https://picsum.photos/seed/${seed}/${size}/${size}`;
 }
-
-export const MOCK_STATS: DashboardStats = {
-  pendingOrders: 5,
-  processingOrders: 8,
-  shippedOrders: 12,
-  completedOrders: 143,
-  totalRevenueTHB: 487_520,
-  totalCustomers: 89,
-};
-
-export const MOCK_ORDERS: AdminOrder[] = [
-  {
-    id: "order-1",
-    orderNumber: "KK-2026-00001",
-    customerName: "Somchai K.",
-    customerEmail: "somchai@example.com",
-    status: "COMPLETED",
-    totalJPY: 15000,
-    totalTHB: 3600,
-    itemCount: 2,
-    createdAt: "2026-03-01T09:00:00Z",
-  },
-  {
-    id: "order-2",
-    orderNumber: "KK-2026-00002",
-    customerName: "Nattaya P.",
-    customerEmail: "nattaya@example.com",
-    status: "SHIPPED_TO_TH",
-    totalJPY: 8000,
-    totalTHB: 1920,
-    itemCount: 1,
-    createdAt: "2026-03-03T12:00:00Z",
-  },
-  {
-    id: "order-3",
-    orderNumber: "KK-2026-00003",
-    customerName: "Aran W.",
-    customerEmail: "aran@example.com",
-    status: "PENDING_PAYMENT",
-    totalJPY: 3500,
-    totalTHB: 840,
-    itemCount: 1,
-    createdAt: "2026-03-06T08:00:00Z",
-  },
-  {
-    id: "order-4",
-    orderNumber: "KK-2026-00004",
-    customerName: "Somchai K.",
-    customerEmail: "somchai@example.com",
-    status: "PROCESSING",
-    totalJPY: 12500,
-    totalTHB: 3000,
-    itemCount: 1,
-    createdAt: "2026-03-05T15:00:00Z",
-  },
-  {
-    id: "order-5",
-    orderNumber: "KK-2026-00005",
-    customerName: "Pimsiri L.",
-    customerEmail: "pimsiri@example.com",
-    status: "CANCELLED",
-    totalJPY: 5000,
-    totalTHB: 1200,
-    itemCount: 1,
-    createdAt: "2026-02-27T10:00:00Z",
-  },
-  {
-    id: "order-6",
-    orderNumber: "KK-2026-00006",
-    customerName: "Wanida T.",
-    customerEmail: "wanida@example.com",
-    status: "PENDING_PAYMENT",
-    totalJPY: 22000,
-    totalTHB: 5280,
-    itemCount: 3,
-    createdAt: "2026-03-06T10:30:00Z",
-  },
-  {
-    id: "order-7",
-    orderNumber: "KK-2026-00007",
-    customerName: "Thanaporn S.",
-    customerEmail: "thanaporn@example.com",
-    status: "PROCESSING",
-    totalJPY: 9800,
-    totalTHB: 2352,
-    itemCount: 2,
-    createdAt: "2026-03-05T18:00:00Z",
-  },
-  {
-    id: "order-8",
-    orderNumber: "KK-2026-00008",
-    customerName: "Nattaya P.",
-    customerEmail: "nattaya@example.com",
-    status: "COMPLETED",
-    totalJPY: 4200,
-    totalTHB: 1008,
-    itemCount: 1,
-    createdAt: "2026-02-20T14:00:00Z",
-  },
-];
 
 export const MOCK_CUSTOMERS: AdminCustomer[] = [
   {

@@ -1,15 +1,3 @@
-export interface AdminOrder {
-  id: string;
-  orderNumber: string;
-  customerName: string;
-  customerEmail: string;
-  status: string;
-  totalJPY: number;
-  totalTHB: number;
-  itemCount: number;
-  createdAt: string;
-}
-
 export interface AdminCustomer {
   id: string;
   name: string;
@@ -53,13 +41,4 @@ export interface Staff {
   position: string;
   isActive: boolean;
   createdAt: string;
-}
-
-export interface DashboardStats {
-  pendingOrders: number;
-  processingOrders: number;
-  shippedOrders: number;
-  completedOrders: number;
-  totalRevenueTHB: number;
-  totalCustomers: number;
 }

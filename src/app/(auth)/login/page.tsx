@@ -24,7 +24,7 @@ export default function LoginPage() {
     setIsSubmitting(false)
 
     if (result.success) {
-      router.push('/')
+      router.push('/overview')
     } else {
       setError(result.error || 'Login failed')
     }

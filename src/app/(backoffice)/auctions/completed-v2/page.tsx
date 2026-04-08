@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import Image from 'next/image'
-import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy } from 'lucide-react'
+import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy, Plus } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
+import BuyoutAddProductModal from '@/components/backoffice/buyout-add-product-modal'
 
 interface AuctionRequest {
   id: number
@@ -70,13 +72,12 @@ interface ShippingLotOption {
   lot_code: string
 }
 
-type ActiveTab = 'not_arrived' | 'air' | 'sea' | 'arrived_th'
+type ActiveTab = 'not_arrived' | 'shipping' | 'arrived_th'
 type ShippingTab = 'air' | 'sea'
 
 const TABS: { id: ActiveTab; label: string }[] = [
   { id: 'not_arrived', label: 'สินค้าที่ยังไม่ถึงบ้านญี่ปุ่น' },
-  { id: 'air', label: 'จัดส่ง air' },
-  { id: 'sea', label: 'จัดส่ง sea' },
+  { id: 'shipping', label: 'จัดส่ง' },
   { id: 'arrived_th', label: 'สินค้าที่ถึงไทยแล้ว' },
 ]
 
@@ -91,7 +92,8 @@ type AuctionListFilters = {
 /** Builds GET /api/backoffice/purchase-requests query (combines with tab: status, delivery_stage, shipping_type). */
 function buildAuctionQuery(
   tab: Exclude<ActiveTab, 'arrived_th'>,
-  filters: AuctionListFilters
+  filters: AuctionListFilters,
+  shippingType: ShippingTab
 ): string {
   const params = new URLSearchParams()
   params.set('page', '1')
@@ -101,15 +103,11 @@ function buildAuctionQuery(
     params.set('purchase_mode', filters.purchaseMode)
   }
   if (tab === 'not_arrived') params.set('delivery_stage', '0')
-  if (tab === 'air') {
+  if (tab === 'shipping') {
     params.set('delivery_stage', '1')
-    params.set('shipping_type', 'air')
+    params.set('shipping_type', shippingType)
   }
-  if (tab === 'sea') {
-    params.set('delivery_stage', '1')
-    params.set('shipping_type', 'sea')
-  }
-  if (tab === 'air' || tab === 'sea') {
+  if (tab === 'shipping') {
     if (filters.lotId != null && !Number.isNaN(filters.lotId)) {
       params.set('lot_id', String(filters.lotId))
     }
@@ -126,8 +124,34 @@ function buildAuctionQuery(
   return params.toString()
 }
 
-export default function CompletedAuctionsPage() {
+/** ถ้า filter ตรงกับรหัสผู้ใช้ (externalId / userCode) ให้ใช้ชื่อผู้ใช้สำหรับ modal กดเว็ป */
+function resolveBuyoutModalUsername(
+  filterRaw: string,
+  auctionItems: AuctionRequest[],
+  domesticItems: DomesticShippingQueueItem[]
+): string {
+  const t = filterRaw.trim()
+  if (!t) return ''
+  const lower = t.toLowerCase()
+  const matchAr = auctionItems.find(
+    (it) => (it.externalId ?? '').toLowerCase() === lower
+  )
+  if (matchAr?.username?.trim()) return matchAr.username.trim()
+
+  const matchDom = domesticItems.find(
+    (it) => (it.userCode ?? '').toLowerCase() === lower
+  )
+  if (matchDom?.username?.trim()) return matchDom.username.trim()
+
+  return t
+}
+
+function CompletedAuctionsPageContent() {
+  const searchParams = useSearchParams()
+  const usernameFromUrl = searchParams.get('username')
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('not_arrived')
+  const [shippingType, setShippingType] = useState<ShippingTab>('air')
   const [items, setItems] = useState<AuctionRequest[]>([])
   const [domesticQueueItems, setDomesticQueueItems] = useState<DomesticShippingQueueItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -168,9 +192,23 @@ export default function CompletedAuctionsPage() {
   const [purchaseModeFilter, setPurchaseModeFilter] = useState<
     '' | 'AUCTION' | 'BUYOUT'
   >('')
+  const [addProductModalOpen, setAddProductModalOpen] = useState(false)
+  /** snapshot ตอนกดเปิด modal — ให้ตรงกับ filter ชื่อลูกค้าตอนนั้น */
+  const [addProductModalInitialUsername, setAddProductModalInitialUsername] =
+    useState('')
+
+  useEffect(() => {
+    if (usernameFromUrl != null && usernameFromUrl !== '') {
+      try {
+        setFilterUser(decodeURIComponent(usernameFromUrl))
+      } catch {
+        setFilterUser(usernameFromUrl)
+      }
+    }
+  }, [usernameFromUrl])
 
   const isNotArrivedTab = activeTab === 'not_arrived'
-  const isShippingTab = activeTab === 'air' || activeTab === 'sea'
+  const isShippingTab = activeTab === 'shipping'
   const isArrivedThTab = activeTab === 'arrived_th'
 
   useEffect(() => {
@@ -190,8 +228,8 @@ export default function CompletedAuctionsPage() {
   }, [lotIdByTab.sea])
 
   useEffect(() => {
-    if (activeTab !== 'air' && activeTab !== 'sea') return
-    const shipTab = activeTab
+    if (activeTab !== 'shipping') return
+    const shipTab = shippingType
     let cancelled = false
     setLoadingShippingLots(true)
     void (async () => {
@@ -227,12 +265,12 @@ export default function CompletedAuctionsPage() {
     return () => {
       cancelled = true
     }
-  }, [activeTab])
+  }, [activeTab, shippingType])
 
   /** ถ้าเลือก lot ที่ไม่มีในรายการหลังโหลด — เคลียร์ */
   useEffect(() => {
-    if (activeTab !== 'air' && activeTab !== 'sea') return
-    const tab = activeTab
+    if (activeTab !== 'shipping') return
+    const tab = shippingType
     const list = shippingLotsByTab[tab]
     if (list.length === 0) return
     setLotIdByTab((prev) => {
@@ -243,7 +281,7 @@ export default function CompletedAuctionsPage() {
       if (list.some((l) => l.id === id)) return prev
       return { ...prev, [tab]: '' }
     })
-  }, [activeTab, shippingLotsByTab])
+  }, [activeTab, shippingType, shippingLotsByTab])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -258,12 +296,7 @@ export default function CompletedAuctionsPage() {
         if (json.success) setDomesticQueueItems(json.data ?? [])
         else setError(json.error?.message ?? 'Failed to load domestic shipping queue')
       } else {
-        const lotStr =
-          activeTab === 'air'
-            ? debouncedLotByTab.air
-            : activeTab === 'sea'
-              ? debouncedLotByTab.sea
-              : ''
+        const lotStr = activeTab === 'shipping' ? debouncedLotByTab[shippingType] : ''
         const lotNum = lotStr.trim()
           ? parseInt(lotStr.replace(/\D/g, ''), 10)
           : NaN
@@ -275,7 +308,7 @@ export default function CompletedAuctionsPage() {
             purchaseModeFilter === 'AUCTION' || purchaseModeFilter === 'BUYOUT'
               ? purchaseModeFilter
               : undefined,
-        })
+        }, shippingType)
         const arRes = await fetch(
           `${API_BACKOFFICE_PREFIX}/purchase-requests?${query}`,
           { credentials: 'include' }
@@ -299,6 +332,7 @@ export default function CompletedAuctionsPage() {
     }
   }, [
     activeTab,
+    shippingType,
     debouncedLotByTab.air,
     debouncedLotByTab.sea,
     intlOutstanding,
@@ -506,7 +540,7 @@ export default function CompletedAuctionsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">
-            การประมูลที่สิ้นสุดแล้ว
+            การจัดการสินค้า
           </h1>
         </div>
         <span className="rounded-full bg-indigo-50 px-4 py-1.5 text-sm font-semibold text-indigo-700">
@@ -532,7 +566,11 @@ export default function CompletedAuctionsPage() {
       </div>
 
       {!isArrivedThTab && (
-        <div className="mb-4 flex flex-wrap items-end gap-4">
+        <div
+          className={`mb-4 flex flex-wrap items-end gap-4 ${
+            !isShippingTab ? 'justify-between' : ''
+          }`}
+        >
           <div>
             <label className="block text-xs font-medium text-sakura-600 mb-1">
               โหมดการซื้อ
@@ -550,35 +588,71 @@ export default function CompletedAuctionsPage() {
               <option value="BUYOUT">BUYOUT</option>
             </select>
           </div>
+          {!isShippingTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setAddProductModalInitialUsername(
+                  resolveBuyoutModalUsername(
+                    filterUser,
+                    items,
+                    domesticQueueItems
+                  )
+                )
+                setAddProductModalOpen(true)
+              }}
+              className="btn-gradient inline-flex items-center justify-center gap-2 px-5 py-2.5 shrink-0 self-end"
+            >
+              <Plus className="h-4 w-4" />
+              เพิ่มสินค้า
+            </button>
+          )}
         </div>
       )}
 
       {isShippingTab && (
-        <div className="mb-4 flex flex-wrap items-end gap-4 rounded-xl border border-sakura-200/80 bg-white p-4 shadow-sm">
-          <div>
-            <label className="block text-xs font-medium text-sakura-600 mb-1">
-              Lot {activeTab === 'air' ? '(Air)' : '(Sea)'}
-            </label>
-            <select
-              value={lotIdByTab[activeTab as ShippingTab]}
-              onChange={(e) =>
-                setLotIdByTab((prev) => ({
-                  ...prev,
-                  [activeTab as ShippingTab]: e.target.value,
-                }))
-              }
-              disabled={loadingShippingLots}
-              className="min-w-[10rem] max-w-xs rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
-                         focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60"
-            >
-              <option value="">ทั้งหมด</option>
-              {shippingLotsByTab[activeTab as ShippingTab].map((lot) => (
-                <option key={lot.id} value={String(lot.id)}>
-                  {lot.lot_code}
-                </option>
-              ))}
-            </select>
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-sakura-200/80 bg-white px-4 py-3 shadow-sm">
+          {/* Air / Sea pill toggle */}
+          <div className="flex items-center gap-0.5 rounded-lg bg-sakura-100/80 p-0.5">
+            {(['air', 'sea'] as const).map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => setShippingType(type)}
+                className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-all ${
+                  shippingType === type
+                    ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-sakura-200/60'
+                    : 'text-sakura-500 hover:text-sakura-800'
+                }`}
+              >
+                {type === 'air' ? '✈ Air' : '🚢 Sea'}
+              </button>
+            ))}
           </div>
+
+          <div className="h-6 w-px bg-sakura-200" />
+
+          {/* Lot */}
+          <select
+            value={lotIdByTab[shippingType]}
+            onChange={(e) =>
+              setLotIdByTab((prev) => ({ ...prev, [shippingType]: e.target.value }))
+            }
+            disabled={loadingShippingLots}
+            className="rounded-lg border border-card-border px-3 py-1.5 text-sm text-sakura-900 min-w-[9rem]
+                       focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60"
+          >
+            <option value="">Lot ทั้งหมด</option>
+            {shippingLotsByTab[shippingType].map((lot) => (
+              <option key={lot.id} value={String(lot.id)}>
+                {lot.lot_code}
+              </option>
+            ))}
+          </select>
+
+          <div className="h-6 w-px bg-sakura-200" />
+
+          {/* Checkboxes */}
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -586,7 +660,7 @@ export default function CompletedAuctionsPage() {
               onChange={(e) => setIntlOutstanding(e.target.checked)}
               className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
             />
-            <span className="text-sm text-sakura-800">ค้าง intl (สินค้าเต็ม + ขนส่งต่างประเทศ)</span>
+            <span className="text-sm text-sakura-800">ค้าง intl</span>
           </label>
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
@@ -595,11 +669,22 @@ export default function CompletedAuctionsPage() {
               onChange={(e) => setOverduePayment(e.target.checked)}
               className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
             />
-            <span className="text-sm text-sakura-800">เลยกำหนดชำระ (Bangkok) และยังค้าง intl</span>
+            <span className="text-sm text-sakura-800">เลยกำหนดชำระ</span>
           </label>
-          <p className="text-xs text-muted max-w-xs">
-            เมื่อเปิดฟิลเตอร์ค้างจ่าย จะขอรายชื่อลูกค้าใน meta อัตโนมัติ (ครบทั้งชุดที่ผ่านฟิลเตอร์)
-          </p>
+
+          {/* Info tooltip */}
+          <span
+            title={
+              'ค้าง intl = สินค้าเต็ม + ขนส่งต่างประเทศยังค้างอยู่\n' +
+              'เลยกำหนดชำระ = Bangkok pickup เลยกำหนด และยังค้าง intl\n' +
+              'เมื่อเปิดฟิลเตอร์ค้างจ่าย จะขอรายชื่อลูกค้าใน meta อัตโนมัติ'
+            }
+            className="ml-auto cursor-help text-sakura-400 hover:text-sakura-600 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+          </span>
         </div>
       )}
 
@@ -1166,6 +1251,27 @@ export default function CompletedAuctionsPage() {
           </div>
         </div>
       )}
+
+      <BuyoutAddProductModal
+        open={addProductModalOpen}
+        onClose={() => setAddProductModalOpen(false)}
+        onSuccess={() => void fetchData()}
+        initialUsername={addProductModalInitialUsername}
+      />
     </div>
+  )
+}
+
+export default function CompletedAuctionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-24 text-muted">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      }
+    >
+      <CompletedAuctionsPageContent />
+    </Suspense>
   )
 }

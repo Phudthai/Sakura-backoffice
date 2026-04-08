@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import { formatDateBangkok } from '@/lib/date-utils'
 import { Loader2 } from 'lucide-react'
@@ -17,7 +18,20 @@ interface Customer {
   createdAt: string
 }
 
+function navigateToPurchasedV2ForCustomer(
+  router: ReturnType<typeof useRouter>,
+  customer: Customer
+) {
+  const u = customer.username?.trim() || customer.userCode?.trim()
+  if (u) {
+    router.push(`/auctions/completed-v2?username=${encodeURIComponent(u)}`)
+  } else {
+    router.push('/auctions/completed-v2')
+  }
+}
+
 export default function CustomersPage() {
+  const router = useRouter()
   const [customers, setCustomers] = useState<Customer[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
@@ -87,7 +101,16 @@ export default function CustomersPage() {
                 {customers.map((customer) => (
                   <tr
                     key={customer.id}
-                    className="border-b border-card-border last:border-0 hover:bg-sakura-50 transition-colors"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigateToPurchasedV2ForCustomer(router, customer)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        navigateToPurchasedV2ForCustomer(router, customer)
+                      }
+                    }}
+                    className="border-b border-card-border last:border-0 hover:bg-sakura-50 transition-colors cursor-pointer"
                   >
                     <td className="px-5 py-3 font-mono text-sakura-800">
                       {customer.userCode ?? '-'}

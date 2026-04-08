@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import { formatPrice } from '@/lib/utils'
 import { Loader2 } from 'lucide-react'
@@ -12,23 +12,54 @@ const OVERVIEW_TABS: { id: OverviewTab; label: string }[] = [
   { id: 'sea', label: 'Sea' },
 ]
 
-interface LotListItem {
-  id: number
-  lot_code: string
-  intl_shipping_type?: string
-  start_lot_at: string | null
-  end_lot_at: string | null
-  arrive_at: string | null
-  is_arrived?: boolean
-  is_delayed?: boolean
-  auction_count?: number
-  createdAt: string
-  updatedAt: string
+function monthInputValueBangkok(d = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(d)
+  const y = parts.find((p) => p.type === 'year')?.value
+  const m = parts.find((p) => p.type === 'month')?.value
+  return y && m ? `${y}-${m}` : ''
 }
 
-interface GroupedLotsData {
-  air: LotListItem[]
-  sea: LotListItem[]
+/** Converts `yyyy-MM` from UI to API month e.g. `2026-3`. */
+function toMonthQueryParam(yyyyMm: string): string {
+  const [y, m] = yyyyMm.split('-')
+  if (!y || !m) return ''
+  const monthNum = Number.parseInt(m, 10)
+  if (!Number.isFinite(monthNum)) return ''
+  return `${y}-${monthNum}`
+}
+
+/** Backend month string (`2026-3` or `2026-03`) → `yyyy-MM` for `<select>` / state. */
+function apiMonthToYyyyMm(api: string): string | null {
+  const trimmed = api.trim()
+  const parts = trimmed.split('-')
+  if (parts.length < 2) return null
+  const y = parts[0]
+  const m = parts[1]
+  if (!y || m === undefined) return null
+  const monthNum = Number.parseInt(m, 10)
+  if (!Number.isFinite(monthNum) || monthNum < 1 || monthNum > 12) return null
+  const yi = Number.parseInt(y, 10)
+  if (!Number.isFinite(yi)) return null
+  return `${yi}-${String(monthNum).padStart(2, '0')}`
+}
+
+function sortMonthsDescUnique(yyyyMms: string[]): string[] {
+  return [...new Set(yyyyMms)].sort((a, b) => b.localeCompare(a))
+}
+
+function formatMonthLabelYyyyMm(yyyyMm: string): string {
+  const [y, m] = yyyyMm.split('-')
+  if (!y || !m) return yyyyMm
+  const d = new Date(Number(y), Number(m) - 1, 1)
+  return d.toLocaleDateString('th-TH', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'Asia/Bangkok',
+  })
 }
 
 interface MoneyBreakdown {
@@ -39,136 +70,163 @@ interface MoneyBreakdown {
 
 interface OverviewStatsData {
   scope: {
-    lotId: number | null
-    status: string
+    year?: number
+    month?: number
+    purchaseMode?: string
+    status?: string
     intlShippingType?: string
+    boughtAtRangeBangkok?: { start?: string; end?: string }
   }
   totalGrams: number
   product: MoneyBreakdown
   intlShipping: MoneyBreakdown
 }
 
-type LotSelectValue = '' | number
+type PurchaseModeFilter = 'all' | 'AUCTION' | 'BUYOUT'
 
-const EMPTY_LOT_FILTER: Record<OverviewTab, LotSelectValue> = {
-  air: '',
-  sea: '',
+const EMPTY_PURCHASE_MODE: Record<OverviewTab, PurchaseModeFilter> = {
+  air: 'all',
+  sea: 'all',
 }
 
 export default function OverviewPage() {
-  const [grouped, setGrouped] = useState<GroupedLotsData | null>(null)
-  const [groupedError, setGroupedError] = useState('')
-  const [loadingLots, setLoadingLots] = useState(true)
-
   const [activeTab, setActiveTab] = useState<OverviewTab>('air')
-  /** ฟิลเตอร์ Lot แยกตามแท็บ — สลับแท็บแล้วค่าไม่หาย */
-  const [lotFilter, setLotFilter] =
-    useState<Record<OverviewTab, LotSelectValue>>(EMPTY_LOT_FILTER)
+  const [monthByTab, setMonthByTab] = useState<Record<OverviewTab, string>>(() => {
+    const m = monthInputValueBangkok()
+    return { air: m, sea: m }
+  })
+  const [purchaseModeByTab, setPurchaseModeByTab] =
+    useState<Record<OverviewTab, PurchaseModeFilter>>(EMPTY_PURCHASE_MODE)
+
+  const [availableMonths, setAvailableMonths] = useState<string[]>([])
+  const [loadingMonths, setLoadingMonths] = useState(true)
+  const [monthsError, setMonthsError] = useState('')
+
   const [stats, setStats] = useState<OverviewStatsData | null>(null)
   const [statsError, setStatsError] = useState('')
   const [loadingStats, setLoadingStats] = useState(false)
 
-  const fetchGrouped = useCallback(async () => {
-    setLoadingLots(true)
-    setGroupedError('')
-    try {
-      const res = await fetch(
-        `${API_BACKOFFICE_PREFIX}/lots/grouped-by-shipping-type?shipping_type=${activeTab}`,
-        { credentials: 'include' }
-      )
-      const json = await res.json()
-      if (json.success && json.data) {
-        setGrouped({
-          air: json.data.air ?? [],
-          sea: json.data.sea ?? [],
+  const purchaseMode = purchaseModeByTab[activeTab]
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadMonths() {
+      setLoadingMonths(true)
+      setMonthsError('')
+      setAvailableMonths([])
+      try {
+        const params = new URLSearchParams()
+        params.set('type', activeTab)
+        params.set('purchase_mode', purchaseMode)
+        const res = await fetch(
+          `${API_BACKOFFICE_PREFIX}/overview/months?${params.toString()}`,
+          { credentials: 'include' }
+        )
+        const json: {
+          success?: boolean
+          data?: { months?: string[] }
+          error?: { message?: string }
+        } = await res.json()
+        if (cancelled) return
+        if (!res.ok || !json.success) {
+          setMonthsError(
+            json.error?.message ?? 'โหลดรายการเดือนไม่สำเร็จ'
+          )
+          setAvailableMonths([])
+          return
+        }
+        const raw = json.data?.months ?? []
+        const parsed = raw
+          .map((s) => apiMonthToYyyyMm(String(s)))
+          .filter((x): x is string => x !== null)
+        const sorted = sortMonthsDescUnique(parsed)
+        setAvailableMonths(sorted)
+        setMonthByTab((prev) => {
+          const cur = prev[activeTab]
+          if (sorted.length === 0) {
+            return { ...prev, [activeTab]: '' }
+          }
+          if (cur && sorted.includes(cur)) {
+            return prev
+          }
+          return { ...prev, [activeTab]: sorted[0]! }
         })
-      } else {
-        setGroupedError(json.error?.message ?? 'โหลดรายการ lot ไม่สำเร็จ')
-        setGrouped(null)
+      } catch {
+        if (!cancelled) {
+          setMonthsError('Network error')
+          setAvailableMonths([])
+        }
+      } finally {
+        if (!cancelled) setLoadingMonths(false)
       }
-    } catch {
-      setGroupedError('Network error')
-      setGrouped(null)
-    } finally {
-      setLoadingLots(false)
     }
-  }, [activeTab])
+    void loadMonths()
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, purchaseMode])
 
   const fetchStats = useCallback(
-    async (lotId: LotSelectValue, tabForReset: OverviewTab) => {
-    setLoadingStats(true)
-    setStatsError('')
-    setStats(null)
-    try {
-      const params = new URLSearchParams()
-      params.set('type', tabForReset)
-      if (lotId !== '') {
-        params.set('lot_id', String(lotId))
-      }
-      const qs = `?${params.toString()}`
-      const res = await fetch(
-        `${API_BACKOFFICE_PREFIX}/overview/stats${qs}`,
-        { credentials: 'include' }
-      )
-      const json = await res.json()
-      if (res.status === 404) {
-        setStatsError(
-          json.error?.message ?? 'ไม่พบ lot ที่เลือกหรือไม่มีในระบบ'
-        )
-        setLotFilter((prev) => ({ ...prev, [tabForReset]: '' }))
+    async (tab: OverviewTab, monthValue: string, purchaseModeFilter: PurchaseModeFilter) => {
+      setLoadingStats(true)
+      setStatsError('')
+      setStats(null)
+      const monthParam = toMonthQueryParam(monthValue)
+      if (!monthParam) {
+        setStatsError('กรุณาเลือกเดือน (month)')
+        setLoadingStats(false)
         return
       }
-      if (res.status === 400) {
-        setStatsError(
-          json.error?.message ?? 'คำขอไม่ถูกต้อง (ตรวจสอบ type / lot_id)'
-        )
-        if (lotId !== '') {
-          setLotFilter((prev) => ({ ...prev, [tabForReset]: '' }))
+      try {
+        const params = new URLSearchParams()
+        params.set('type', tab)
+        params.set('month', monthParam)
+        if (purchaseModeFilter !== 'all') {
+          params.set('purchase_mode', purchaseModeFilter)
         }
-        return
+        const qs = `?${params.toString()}`
+        const res = await fetch(
+          `${API_BACKOFFICE_PREFIX}/overview/stats${qs}`,
+          { credentials: 'include' }
+        )
+        const json = await res.json()
+        if (res.status === 400) {
+          setStatsError(
+            json.error?.message ?? 'คำขอไม่ถูกต้อง (ตรวจสอบ type / month / purchase_mode)'
+          )
+          return
+        }
+        if (json.success && json.data) {
+          setStats(json.data as OverviewStatsData)
+        } else {
+          setStatsError(json.error?.message ?? 'โหลดสถิติไม่สำเร็จ')
+        }
+      } catch {
+        setStatsError('Network error')
+      } finally {
+        setLoadingStats(false)
       }
-      if (json.success && json.data) {
-        setStats(json.data as OverviewStatsData)
-      } else {
-        setStatsError(json.error?.message ?? 'โหลดสถิติไม่สำเร็จ')
-      }
-    } catch {
-      setStatsError('Network error')
-    } finally {
-      setLoadingStats(false)
-    }
-  },
-  []
-)
+    },
+    []
+  )
 
   useEffect(() => {
-    fetchGrouped()
-  }, [fetchGrouped])
-
-  useEffect(() => {
-    if (loadingLots) return
-    fetchStats(lotFilter[activeTab], activeTab)
-  }, [activeTab, lotFilter, loadingLots, fetchStats])
-
-  const lotOptions = useMemo(() => {
-    if (!grouped) return []
-    const list = activeTab === 'air' ? grouped.air : grouped.sea
-    return [...list].sort((a, b) => b.id - a.id)
-  }, [grouped, activeTab])
-
-  /** ตรวจเฉพาะแท็บที่เปิด — เมื่อส่ง shipping_type แล้วอีกกลุ่มเป็น [] จะไม่เคลียร์ lot ของอีกแท็บ */
-  useEffect(() => {
-    if (!grouped) return
-    setLotFilter((prev) => {
-      const id = prev[activeTab]
-      if (id === '') return prev
-      const list = activeTab === 'air' ? grouped.air : grouped.sea
-      if (list.some((l) => l.id === id)) return prev
-      return { ...prev, [activeTab]: '' }
-    })
-  }, [grouped, activeTab])
+    if (loadingMonths) return
+    const m = monthByTab[activeTab]
+    if (!m) return
+    void fetchStats(activeTab, m, purchaseModeByTab[activeTab])
+  }, [activeTab, monthByTab, purchaseModeByTab, fetchStats, loadingMonths])
 
   const formatBaht = (n: number) => `฿${formatPrice(n)}`
+
+  const monthInput = monthByTab[activeTab] || ''
+
+  const monthSelectValue =
+    loadingMonths || availableMonths.length === 0
+      ? ''
+      : availableMonths.includes(monthInput)
+        ? monthInput
+        : (availableMonths[0] ?? '')
 
   return (
     <div>
@@ -194,40 +252,70 @@ export default function OverviewPage() {
           ))}
         </div>
 
-        <div className="flex flex-col gap-1 max-w-md">
-          <label className="text-xs font-medium text-sakura-600">
-            {activeTab === 'air' ? 'กรอง Lot — Air' : 'กรอง Lot — Sea'}
-          </label>
-          <select
-            value={
-              lotFilter[activeTab] === ''
-                ? ''
-                : String(lotFilter[activeTab])
-            }
-            onChange={(e) => {
-              const v = e.target.value
-              const next = v === '' ? '' : Number(v)
-              setLotFilter((prev) => ({ ...prev, [activeTab]: next }))
-            }}
-            disabled={loadingLots}
-            className="rounded-xl border border-card-border bg-white px-4 py-2.5 text-sm text-sakura-900
-                       focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-          >
-            <option value="">ทั้งหมด</option>
-            {lotOptions.map((lot) => (
-              <option key={lot.id} value={lot.id}>
-                {lot.lot_code}
-              </option>
-            ))}
-          </select>
+        <div className="flex flex-col sm:flex-row flex-wrap gap-4 max-w-2xl">
+          <div className="flex flex-col gap-1 min-w-[200px]">
+            <label className="text-xs font-medium text-sakura-600">
+              เดือน (Asia/Bangkok) <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <select
+                value={monthSelectValue}
+                disabled={loadingMonths || availableMonths.length === 0}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setMonthByTab((prev) => ({ ...prev, [activeTab]: v }))
+                }}
+                className="w-full rounded-xl border border-card-border bg-white px-4 py-2.5 text-sm text-sakura-900
+                           focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300
+                           disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {loadingMonths ? (
+                  <option value="">กำลังโหลด...</option>
+                ) : availableMonths.length === 0 ? (
+                  <option value="">ไม่มีเดือนที่มีข้อมูล</option>
+                ) : (
+                  availableMonths.map((ym) => (
+                    <option key={ym} value={ym}>
+                      {formatMonthLabelYyyyMm(ym)}
+                    </option>
+                  ))
+                )}
+              </select>
+              {loadingMonths && (
+                <span className="absolute right-10 top-1/2 -translate-y-1/2 pointer-events-none">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted" />
+                </span>
+              )}
+            </div>
+            {monthsError && (
+              <p className="text-xs text-red-600">{monthsError}</p>
+            )}
+            <p className="text-xs text-muted">
+              สถิตินับเฉพาะรายการ completed ที่ bought_at อยู่ในเดือนนี้
+            </p>
+          </div>
+          <div className="flex flex-col gap-1 min-w-[200px]">
+            <label className="text-xs font-medium text-sakura-600">
+              โหมดการซื้อ
+            </label>
+            <select
+              value={purchaseModeByTab[activeTab]}
+              onChange={(e) =>
+                setPurchaseModeByTab((prev) => ({
+                  ...prev,
+                  [activeTab]: e.target.value as PurchaseModeFilter,
+                }))
+              }
+              className="rounded-xl border border-card-border bg-white px-4 py-2.5 text-sm text-sakura-900
+                         focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+            >
+              <option value="all">ทั้งหมด (ประมูล + ซื้อทันที)</option>
+              <option value="AUCTION">AUCTION</option>
+              <option value="BUYOUT">BUYOUT</option>
+            </select>
+          </div>
         </div>
       </div>
-
-      {groupedError && (
-        <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-100 text-red-700 text-sm">
-          {groupedError}
-        </div>
-      )}
 
       {statsError && (
         <div className="mb-4 p-4 rounded-xl bg-red-50 border border-red-100 text-red-700 text-sm">
@@ -235,7 +323,7 @@ export default function OverviewPage() {
         </div>
       )}
 
-      {loadingStats && !stats && !statsError && (
+      {loadingStats && !stats && !statsError && !loadingMonths && monthInput && (
         <div className="flex items-center justify-center py-16 text-muted">
           <Loader2 className="h-8 w-8 animate-spin" />
         </div>
@@ -249,11 +337,24 @@ export default function OverviewPage() {
               {stats.scope.intlShippingType
                 ? `${String(stats.scope.intlShippingType).toUpperCase()} · `
                 : ''}
-              {stats.scope.lotId == null
-                ? `ทั้งหมด (${stats.scope.status})`
-                : `Lot ID ${stats.scope.lotId} · ${stats.scope.status}`}
+              {stats.scope.year != null && stats.scope.month != null
+                ? `เดือน ${stats.scope.year}-${stats.scope.month} (Bangkok)`
+                : '—'}
+              {stats.scope.purchaseMode && stats.scope.purchaseMode !== 'all'
+                ? ` · ${stats.scope.purchaseMode}`
+                : ''}
+              {stats.scope.status ? ` · ${stats.scope.status}` : ''}
             </span>
           </p>
+          {stats.scope.boughtAtRangeBangkok &&
+            (stats.scope.boughtAtRangeBangkok.start ||
+              stats.scope.boughtAtRangeBangkok.end) && (
+              <p className="text-xs text-muted">
+                ช่วง bought_at:{' '}
+                {stats.scope.boughtAtRangeBangkok.start ?? '—'} —{' '}
+                {stats.scope.boughtAtRangeBangkok.end ?? '—'}
+              </p>
+            )}
 
           <div className="rounded-2xl border border-sakura-200/60 bg-white shadow-card p-6">
             <p className="text-xs font-medium text-sakura-600 uppercase tracking-wider mb-1">

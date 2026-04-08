@@ -219,7 +219,7 @@ export default function PendingBidsPage() {
     setNoteSaving(true);
     try {
       const res = await fetch(
-        `${API_BACKOFFICE_PREFIX}/auction-requests/${editingNoteArId}/note`,
+        `${API_BACKOFFICE_PREFIX}/purchase-requests/${editingNoteArId}/note`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },

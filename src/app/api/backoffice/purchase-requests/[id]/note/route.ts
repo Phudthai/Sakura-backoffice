@@ -8,7 +8,7 @@ export async function PATCH(
 ) {
   const { id } = await params
   const body = await request.json()
-  return proxyToBackend(request, `${API_BACKOFFICE_PREFIX}/auction-requests/${id}/note`, {
+  return proxyToBackend(request, `${API_BACKOFFICE_PREFIX}/purchase-requests/${id}/note`, {
     method: 'PATCH',
     body,
   })
