@@ -3,14 +3,31 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import { purchaseModeLabelTh } from '@/lib/purchase-mode-label'
 import {
-  postAuctionRequest,
+  submitAuctionFirstFlow,
   submitBuyoutFlow,
   type BuyoutFormTab,
 } from '@/lib/buyout-request'
 import Image from 'next/image'
-import { ExternalLink, Search, Loader2, Plus, Send, X, Link2, Pencil, Check, TrendingUp, ChevronDown } from 'lucide-react'
+import { ExternalLink, Search, Loader2, Plus, Send, X, Link2, Pencil, Check, TrendingUp } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
+import { createPortal } from 'react-dom'
+
+function computeNotePopoverPosition(rect: DOMRect): { top: number; left: number; width: number } {
+  const width = Math.min(240, window.innerWidth - 24)
+  const margin = 12
+  const approxHeight = 168
+  let left = rect.left
+  if (left + width > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - width - margin)
+  if (left < margin) left = margin
+  let top = rect.bottom + 8
+  if (top + approxHeight > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - approxHeight - 8)
+  }
+  if (top < margin) top = margin
+  return { top, left, width }
+}
 
 interface AuctionRequest {
   id: number
@@ -28,6 +45,24 @@ interface AuctionRequest {
   register_url?: string
   lastBid?: { price: number; status: string }
   purchaseMode?: string
+  site_name?: string
+  siteName?: string
+  /** ชื่อเว็ปจาก API */
+  webName?: string
+  web_name?: string
+}
+
+function siteNameFromItem(item: AuctionRequest): string {
+  const raw = item.webName ?? item.web_name ?? item.siteName ?? item.site_name
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  if (item.url) {
+    try {
+      return new URL(item.url).hostname.replace(/^www\./, '')
+    } catch {
+      return '—'
+    }
+  }
+  return '—'
 }
 
 function useCountdown(endISO?: string | null) {
@@ -91,29 +126,8 @@ type IntlShippingChoice = 'air' | 'sea'
 /** ประมูลครั้งแรก: Yahoo / Mercari */
 type AuctionFormTab = 'yahoo' | 'mercari'
 
-async function submitAuctionFirstFlow(payload: {
-  auctionSource: AuctionFormTab
-  username: string
-  url: string
-  intl_shipping_type: 'air' | 'sea'
-  transferredYen?: number
-  openingBidYen?: number
-}): Promise<{ id: number; data: unknown }> {
-  const base: Record<string, unknown> = {
-    purchase_mode: 'AUCTION' as const,
-    auctionSource: payload.auctionSource,
-    url: payload.url.trim(),
-    intl_shipping_type: payload.intl_shipping_type,
-    username: payload.username.trim(),
-  }
-  if (payload.transferredYen != null && Number.isFinite(payload.transferredYen)) {
-    base.transferredYen = payload.transferredYen
-  }
-  if (payload.openingBidYen != null && Number.isFinite(payload.openingBidYen)) {
-    base.firstBidPrice = payload.openingBidYen
-  }
-  return postAuctionRequest(base)
-}
+/** ประมูล: เปิด bid กับชำระจบทันที ห้ามใช้พร้อมกัน */
+type AuctionUiIntent = 'open_bid' | 'paid_instant'
 
 function OpenBidForUserPageContent() {
   const searchParams = useSearchParams()
@@ -131,8 +145,12 @@ function OpenBidForUserPageContent() {
   const [firstBidPrice, setFirstBidPrice] = useState('')
   const [intlShippingType, setIntlShippingType] = useState<IntlShippingChoice | null>(null)
   const [username, setUsername] = useState('')
-  /** โอนมาแล้ว — จำนวนเงิน (เยน) */
-  const [transferredYen, setTransferredYen] = useState('')
+  /** ชำระแล้ว (บาท) — ใช้คู่สลิปเมื่อ > 0 */
+  const [paidThb, setPaidThb] = useState('')
+  const [slipFile, setSlipFile] = useState<File | null>(null)
+  /** Mercari — ราคารายการ (เยน) บังคับ */
+  const [mercariItemJpy, setMercariItemJpy] = useState('')
+  const [auctionUiIntent, setAuctionUiIntent] = useState<AuctionUiIntent>('open_bid')
   const [buyoutTab, setBuyoutTab] = useState<BuyoutFormTab>('yahoo')
   const [productTitle, setProductTitle] = useState('')
   const [siteName, setSiteName] = useState('')
@@ -142,37 +160,54 @@ function OpenBidForUserPageContent() {
   const [formError, setFormError] = useState('')
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
   const [editingNoteValue, setEditingNoteValue] = useState('')
+  const [notePopoverPos, setNotePopoverPos] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
   const [noteSaving, setNoteSaving] = useState(false)
   const [biddingId, setBiddingId] = useState<number | null>(null)
-  const [staffs, setStaffs] = useState<{ id: number; name: string }[]>([])
+  const [teamUsers, setTeamUsers] = useState<{ id: number; name: string }[]>([])
   const [bidModalItem, setBidModalItem] = useState<AuctionRequest | null>(null)
   const [bidPrice, setBidPrice] = useState('')
-  const [bidModalStaff, setBidModalStaff] = useState('')
+  const [bidModalUserId, setBidModalUserId] = useState('')
   const [bidModalError, setBidModalError] = useState('')
-  const hasInitializedStaff = useRef(false)
+  const hasInitializedBidActor = useRef(false)
 
   const fetchData = useCallback(async () => {
     try {
-      const [bidsRes, staffsRes] = await Promise.all([
-        fetch(`${API_BACKOFFICE_PREFIX}/purchase-requests?page=1&limit=20&status=pending`, {
+      const params = new URLSearchParams()
+      params.set('page', '1')
+      params.set('limit', '20')
+      params.set('is_register', 'false')
+      params.set(
+        'purchase_mode',
+        purchaseModeFromUrl === 'BUYOUT' ? 'BUYOUT' : 'AUCTION'
+      )
+      const purchaseQs = params.toString()
+
+      const [bidsRes, usersRes] = await Promise.all([
+        fetch(`${API_BACKOFFICE_PREFIX}/purchase-requests?${purchaseQs}`, {
           credentials: 'include',
         }),
-        fetch(`${API_BACKOFFICE_PREFIX}/staffs`, { credentials: 'include' }),
+        fetch(`${API_BACKOFFICE_PREFIX}/users`, { credentials: 'include' }),
       ])
       const bidsJson = await bidsRes.json()
-      const staffsJson = await staffsRes.json()
+      const usersJson = await usersRes.json()
 
       if (bidsJson.success) setItems(bidsJson.data ?? [])
       else setError(bidsJson.error?.message ?? 'Failed to load auction requests')
 
-      if (staffsJson.success) {
-        const list = (staffsJson.data ?? []).map((s: { id: number; name: string }) => ({
-          id: Number(s.id),
-          name: s.name ?? String(s.id),
-        }))
-        setStaffs(list)
-        if (list.length > 0 && !hasInitializedStaff.current) {
-          hasInitializedStaff.current = true
+      if (usersJson.success) {
+        const list = (usersJson.data ?? []).map(
+          (u: { id: number; name?: string; username?: string }) => ({
+            id: Number(u.id),
+            name: (u.name ?? u.username ?? String(u.id)).trim() || String(u.id),
+          })
+        )
+        setTeamUsers(list)
+        if (list.length > 0 && !hasInitializedBidActor.current) {
+          hasInitializedBidActor.current = true
         }
       }
     } catch {
@@ -180,7 +215,7 @@ function OpenBidForUserPageContent() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [purchaseModeFromUrl])
 
   useEffect(() => {
     fetchData()
@@ -203,7 +238,10 @@ function OpenBidForUserPageContent() {
     setFirstBidPrice('')
     setIntlShippingType(null)
     setUsername('')
-    setTransferredYen('')
+    setPaidThb('')
+    setSlipFile(null)
+    setMercariItemJpy('')
+    setAuctionUiIntent('open_bid')
     setBuyoutTab('yahoo')
     setProductTitle('')
     setSiteName('')
@@ -217,7 +255,10 @@ function OpenBidForUserPageContent() {
     setFirstBidPrice('')
     setIntlShippingType(null)
     setUsername('')
-    setTransferredYen('')
+    setPaidThb('')
+    setSlipFile(null)
+    setMercariItemJpy('')
+    setAuctionUiIntent('open_bid')
     setBuyoutTab('yahoo')
     setProductTitle('')
     setSiteName('')
@@ -225,15 +266,30 @@ function OpenBidForUserPageContent() {
     setAuctionTab('yahoo')
   }
 
-  const startEditNote = (itemId: number, currentNote: string | null) => {
+  const startEditNote = (itemId: number, currentNote: string | null, anchorRect: DOMRect) => {
     setEditingNoteId(itemId)
     setEditingNoteValue(currentNote ?? '')
+    setNotePopoverPos(computeNotePopoverPosition(anchorRect))
   }
 
   const cancelEditNote = () => {
     setEditingNoteId(null)
     setEditingNoteValue('')
+    setNotePopoverPos(null)
   }
+
+  useEffect(() => {
+    if (editingNoteId == null) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEditingNoteId(null)
+        setEditingNoteValue('')
+        setNotePopoverPos(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editingNoteId])
 
   const saveNote = async () => {
     if (editingNoteId == null) return
@@ -271,27 +327,27 @@ function OpenBidForUserPageContent() {
       requestPrice > item.currentPrice ? requestPrice : item.currentPrice + 1
     setBidModalItem(item)
     setBidPrice(String(defaultPrice))
-    setBidModalStaff(staffs.length > 0 ? String(staffs[0].id) : '')
+    setBidModalUserId(teamUsers.length > 0 ? String(teamUsers[0].id) : '')
     setBidModalError('')
   }
 
   const closeBidModal = () => {
     setBidModalItem(null)
     setBidPrice('')
-    setBidModalStaff('')
+    setBidModalUserId('')
     setBidModalError('')
   }
 
   const handleSubmitBid = async () => {
     if (!bidModalItem) return
     const price = Number(bidPrice.replace(/[^0-9]/g, ''))
-    const staffId = bidModalStaff ? Number(bidModalStaff) : 0
+    const actorId = bidModalUserId ? Number(bidModalUserId) : 0
     if (price <= bidModalItem.currentPrice) {
       setBidModalError('ราคา Bid ต้องสูงกว่าราคาปัจจุบันอย่างน้อย 1 ¥')
       return
     }
-    if (staffId <= 0) {
-      setBidModalError('กรุณาเลือก Staff')
+    if (actorId <= 0) {
+      setBidModalError('กรุณาเลือกผู้ดำเนินการ')
       return
     }
     setBiddingId(bidModalItem.id)
@@ -302,7 +358,7 @@ function OpenBidForUserPageContent() {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ price, biddedBy: staffId }),
+          body: JSON.stringify({ price, biddedBy: actorId }),
           credentials: 'include',
         }
       )
@@ -330,22 +386,28 @@ function OpenBidForUserPageContent() {
         return
       }
       const shippingType = intlShippingType
+      const uname = username.trim()
+      const paidDigits = paidThb.replace(/[^0-9.]/g, '').replace(/\./g, '')
+      const paidAmount = paidDigits === '' ? 0 : Number(paidDigits)
+      const mercariDigits = mercariItemJpy.replace(/[^0-9]/g, '')
+      const mercariJpy = mercariDigits === '' ? undefined : Number(mercariDigits)
+
       if (purchaseModeFromUrl === 'BUYOUT') {
-        const uname = username.trim()
-        if (!uname) {
-          setFormError('กรุณากรอกชื่อผู้ใช้')
-          return
-        }
         const u = url.trim()
         if (!u) {
           setFormError('กรุณากรอกลิงก์สินค้า')
           return
         }
-        const transferDigits = transferredYen.replace(/[^0-9]/g, '')
-        const transferAmount =
-          transferDigits === '' ? undefined : Number(transferDigits)
-        if (transferDigits !== '' && (transferAmount === undefined || transferAmount < 0)) {
-          setFormError('กรุณากรอกจำนวนเงินโอน (เยน) ให้ถูกต้อง')
+        if (buyoutTab === 'mercari' && (mercariJpy == null || mercariJpy <= 0)) {
+          setFormError('Mercari ต้องระบุราคารายการ (เยน)')
+          return
+        }
+        if (paidAmount < 0) {
+          setFormError('จำนวนเงิน (บาท) ไม่ถูกต้อง')
+          return
+        }
+        if (paidAmount > 0 && !slipFile) {
+          setFormError('กรุณาแนบสลิปเมื่อระบุยอดที่โอน (บาท)')
           return
         }
         if (buyoutTab === 'general_web') {
@@ -366,21 +428,26 @@ function OpenBidForUserPageContent() {
           }
           await submitBuyoutFlow({
             buyoutTab: 'general_web',
-            username: uname,
+            username: uname || undefined,
             url: u,
-            transferredYen: transferAmount,
             intl_shipping_type: shippingType,
-            productTitle: pt,
-            siteName: sn,
-            priceYen: Number(py),
+            client_entry: 'first_buyout',
+            paidThb: paidAmount > 0 ? paidAmount : undefined,
+            slip: paidAmount > 0 ? slipFile : undefined,
+            product_title: pt,
+            site_name: sn,
+            first_bid_price: Number(py),
           })
         } else {
           await submitBuyoutFlow({
             buyoutTab,
-            username: uname,
+            username: uname || undefined,
             url: u,
-            transferredYen: transferAmount,
             intl_shipping_type: shippingType,
+            client_entry: 'first_buyout',
+            paidThb: paidAmount > 0 ? paidAmount : undefined,
+            slip: paidAmount > 0 ? slipFile : undefined,
+            item_price_jpy: buyoutTab === 'mercari' ? mercariJpy : undefined,
           })
         }
       } else {
@@ -389,50 +456,51 @@ function OpenBidForUserPageContent() {
           setFormError('กรุณากรอกลิงก์สินค้า')
           return
         }
-        const transferDigits = transferredYen.replace(/[^0-9]/g, '')
-        const transferAmt =
-          transferDigits === '' ? undefined : Number(transferDigits)
-        const openingDigits = firstBidPrice.replace(/[^0-9]/g, '')
-        const openingAmt =
-          openingDigits === '' ? undefined : Number(openingDigits)
-
-        const uname = username.trim()
-        if (!uname) {
-          setFormError('กรุณากรอกผู้ใช้งาน')
+        if (auctionTab === 'mercari' && (mercariJpy == null || mercariJpy <= 0)) {
+          setFormError('Mercari ต้องระบุราคารายการ (เยน)')
           return
         }
-        if (transferDigits !== '' && (transferAmt === undefined || transferAmt < 0)) {
-          setFormError('กรุณากรอกโอนมาแล้ว (เยน) ให้ถูกต้อง')
-          return
+        if (auctionUiIntent === 'paid_instant') {
+          if (paidAmount <= 0) {
+            setFormError('กรุณาระบุจำนวนเงินที่ลูกค้าโอน (บาท)')
+            return
+          }
+          if (!slipFile) {
+            setFormError('กรุณาแนบสลิปเมื่อมีการชำระเงิน')
+            return
+          }
+          await submitAuctionFirstFlow({
+            auction_source: auctionTab,
+            username: uname || undefined,
+            url: u,
+            intl_shipping_type: shippingType,
+            intent: 'paid_instant',
+            paid: paidAmount,
+            slip: slipFile,
+            item_price_jpy: auctionTab === 'mercari' ? mercariJpy : undefined,
+          })
+        } else {
+          const openingDigits = firstBidPrice.replace(/[^0-9]/g, '')
+          const openingAmt =
+            openingDigits === '' ? undefined : Number(openingDigits)
+          if (openingAmt == null || openingAmt <= 0) {
+            setFormError('กรุณากรอกราคาเปิดประมูล (เยน)')
+            return
+          }
+          if (paidAmount > 0 || slipFile) {
+            setFormError('โหมดเปิดประมูลไม่ใช้ยอดโอนบาท/สลิป — เปลี่ยนเป็น “ชำระแล้ว (จบดีล)” หรือล้างช่อง')
+            return
+          }
+          await submitAuctionFirstFlow({
+            auction_source: auctionTab,
+            username: uname || undefined,
+            url: u,
+            intl_shipping_type: shippingType,
+            intent: 'open_bid',
+            first_bid_price: openingAmt,
+            item_price_jpy: auctionTab === 'mercari' ? mercariJpy : undefined,
+          })
         }
-        if (
-          openingDigits !== '' &&
-          (openingAmt === undefined || openingAmt <= 0)
-        ) {
-          setFormError('กรุณากรอกราคาเปิดประมูล (เยน) ให้ถูกต้อง')
-          return
-        }
-        if (
-          (transferDigits === '' || transferAmt === undefined) &&
-          (openingDigits === '' || openingAmt === undefined)
-        ) {
-          setFormError('กรุณากรอกโอนมาแล้ว (เยน) หรือราคาเปิดประมูล (เยน) อย่างน้อยหนึ่งช่อง')
-          return
-        }
-        await submitAuctionFirstFlow({
-          auctionSource: auctionTab,
-          username: uname,
-          url: u,
-          intl_shipping_type: shippingType,
-          transferredYen:
-            transferDigits !== '' && transferAmt !== undefined
-              ? transferAmt
-              : undefined,
-          openingBidYen:
-            openingDigits !== '' && openingAmt !== undefined && openingAmt > 0
-              ? openingAmt
-              : undefined,
-        })
       }
       handleCloseModal()
       fetchData()
@@ -446,7 +514,8 @@ function OpenBidForUserPageContent() {
   const pageTitle =
     purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ปครั้งแรก' : 'ประมูลครั้งแรก'
   const primaryActionLabel =
-    purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'Auction'
+    purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'ประมูล'
+  const isBuyout = purchaseModeFromUrl === 'BUYOUT'
 
   return (
     <div>
@@ -455,8 +524,8 @@ function OpenBidForUserPageContent() {
           <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">{pageTitle}</h1>
           <p className="text-sm text-muted mt-1">
             {purchaseModeFromUrl === 'BUYOUT'
-              ? 'สร้างคำขอซื้อทันที (BUYOUT) ให้ลูกค้า'
-              : 'เปิดการประมูล (AUCTION) ให้ลูกค้า'}
+              ? 'สร้างคำขอซื้อทันที (กดเว็ป) ให้ลูกค้า'
+              : 'เปิดการประมูลให้ลูกค้า'}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -508,18 +577,37 @@ function OpenBidForUserPageContent() {
             <table className="w-full table-fixed text-sm">
               <thead>
                 <tr className="border-b border-sakura-200 bg-sakura-50/80">
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">รหัสผู้ใช้</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36">ชื่อผู้ใช้</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">สินค้า</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">ลิงก์ประมูล</th>
+                  <th className="px-2 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-[5.25rem] max-w-[5.25rem] whitespace-nowrap">รหัสผู้ใช้</th>
+                  <th className="px-2 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-[5.5rem] max-w-[5.5rem]">ชื่อผู้ใช้</th>
+                  <th
+                    className={`px-4 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center min-w-0 ${
+                      isBuyout ? 'w-[20%]' : 'w-[12%]'
+                    }`}
+                  >
+                    สินค้า
+                  </th>
+                  <th className="px-4 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28 whitespace-nowrap">ลิงก์ประมูล</th>
+                  <th
+                    className={`text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center ${
+                      isBuyout
+                        ? 'w-[6rem] max-w-[6rem] min-w-0 shrink-0 px-3 py-4'
+                        : 'min-w-[7rem] px-6 py-4'
+                    }`}
+                  >
+                    ชื่อเว็ป
+                  </th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">ราคาปัจจุบัน</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">ราคาที่ขอ</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">เวลาสิ้นสุด</th>
+                  {!isBuyout && (
+                    <>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-[120px] whitespace-nowrap">ราคาที่ขอ</th>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">เวลาสิ้นสุด</th>
+                    </>
+                  )}
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28 whitespace-nowrap">โหมด</th>
                   <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-24 whitespace-nowrap">สถานะ</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">หมายเหตุ</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap bg-purple-100">ลิงก์ลงทะเบียน</th>
-                  <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center">การดำเนินการ</th>
+                  <th className="px-2 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-[10rem] max-w-[10rem]">หมายเหตุ</th>
+                  <th className="px-2 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-[7.1rem] max-w-[7.1rem] whitespace-nowrap bg-purple-100">ลงทะเบียน</th>
+                  <th className="px-2 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-[8.9rem] max-w-[8.9rem] whitespace-nowrap">ดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -528,18 +616,18 @@ function OpenBidForUserPageContent() {
                     key={item.id}
                     className="border-b border-sakura-100 last:border-0 hover:bg-indigo-50/30 transition-colors group"
                   >
-                    <td className="px-6 py-5 align-middle text-center w-36">
-                      <span className="inline-flex items-center rounded-lg bg-sakura-100 px-2.5 py-1 font-mono text-xs font-medium text-sakura-800 max-w-full truncate" title={item.externalId ?? undefined}>
+                    <td className="px-2 py-5 align-middle text-center w-[5.25rem] max-w-[5.25rem]">
+                      <span className="inline-flex max-w-full items-center justify-center rounded-lg bg-sakura-100 px-1.5 py-1 font-mono text-[11px] font-medium text-sakura-800 truncate" title={item.externalId ?? undefined}>
                         {item.externalId ?? '-'}
                       </span>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-36">
-                      <span className="inline-flex items-center rounded-lg bg-sakura-100 px-2.5 py-1 font-mono text-xs font-semibold text-sakura-800">
+                    <td className="px-2 py-5 align-middle text-center w-[5.5rem] max-w-[5.5rem]">
+                      <span className="inline-flex max-w-full items-center justify-center rounded-lg bg-sakura-100 px-1.5 py-1 font-mono text-[11px] font-semibold text-sakura-800 truncate" title={item.username ?? undefined}>
                         {item.username ?? '-'}
                       </span>
                     </td>
-                    <td className="px-6 py-5 align-middle">
-                      <div className="flex items-center gap-4">
+                    <td className={`px-4 py-5 align-middle min-w-0 text-center ${isBuyout ? 'w-[20%]' : 'w-[12%]'}`}>
+                      <div className="flex min-w-0 w-full flex-row items-center gap-3">
                         {item.imageUrl ? (
                           <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-sakura-100 ring-1 ring-sakura-200/50">
                             <Image
@@ -555,19 +643,19 @@ function OpenBidForUserPageContent() {
                             —
                           </div>
                         )}
-                        <span className="font-medium text-sakura-900 line-clamp-2 max-w-[200px] leading-snug">
+                        <span className="min-w-0 flex-1 font-medium text-sakura-900 line-clamp-3 text-center leading-snug break-words">
                           {item.title ?? '-'}
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-36">
+                    <td className="px-4 py-5 align-middle text-center w-28">
                       {item.url ? (
                         <a
                           href={item.url}
                           target="_blank"
                           rel="noopener noreferrer"
                           title={item.url}
-                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700 hover:underline text-xs font-medium"
+                          className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:text-indigo-700 hover:underline"
                         >
                           <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                           Link
@@ -576,6 +664,18 @@ function OpenBidForUserPageContent() {
                         <span className="text-muted">-</span>
                       )}
                     </td>
+                    <td
+                      className={`py-5 align-middle text-center ${
+                        isBuyout ? 'w-[6rem] max-w-[6rem] px-3' : 'max-w-[10rem] px-6'
+                      }`}
+                    >
+                      <span
+                        className="text-sm text-sakura-800 line-clamp-2 break-words"
+                        title={siteNameFromItem(item)}
+                      >
+                        {siteNameFromItem(item)}
+                      </span>
+                    </td>
                     <td className="px-6 py-5 align-middle text-center w-[120px]">
                       <div className="flex min-h-[56px] w-full items-center justify-center">
                         <span className="font-bold tabular-nums text-sakura-900 whitespace-nowrap">
@@ -583,19 +683,23 @@ function OpenBidForUserPageContent() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-[120px]">
-                      <div className="flex min-h-[56px] w-full items-center justify-center">
-                        <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
-                          ¥{formatPrice(item.lastBid?.price)}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-5 align-middle text-center">
-                      <Countdown endISO={item.endTime} />
-                    </td>
+                    {!isBuyout && (
+                      <>
+                        <td className="px-6 py-5 align-middle text-center w-[120px]">
+                          <div className="flex min-h-[56px] w-full items-center justify-center">
+                            <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
+                              ¥{formatPrice(item.lastBid?.price)}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-5 align-middle text-center">
+                          <Countdown endISO={item.endTime} />
+                        </td>
+                      </>
+                    )}
                     <td className="px-6 py-5 align-middle text-center w-28">
                       <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                        {item.purchaseMode ?? '—'}
+                        {purchaseModeLabelTh(item.purchaseMode)}
                       </span>
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-24">
@@ -611,86 +715,57 @@ function OpenBidForUserPageContent() {
                         {item.status}
                       </span>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center">
-                      {editingNoteId === item.id ? (
-                        <div className="flex flex-col gap-1.5 min-w-[180px]">
-                          <textarea
-                            value={editingNoteValue}
-                            onChange={(e) => setEditingNoteValue(e.target.value.slice(0, 2000))}
-                            placeholder="Add note..."
-                            rows={2}
-                            maxLength={2000}
-                            className="rounded-lg border border-sakura-200 px-2.5 py-1.5 text-xs resize-none
-                                       focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-                            autoFocus
-                          />
-                          <div className="flex gap-1.5">
-                            <button
-                              onClick={saveNote}
-                              disabled={noteSaving}
-                              className="flex-1 inline-flex items-center justify-center gap-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white
-                                         hover:bg-indigo-700 disabled:opacity-50"
-                            >
-                              {noteSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                              Save
-                            </button>
-                            <button
-                              onClick={cancelEditNote}
-                              className="rounded border border-sakura-200 px-2 py-1 text-xs font-medium text-sakura-600 hover:bg-sakura-50"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => startEditNote(item.id, item.note ?? null)}
-                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors text-left min-h-[32px]"
+                    <td className="px-2 py-5 align-middle text-center w-[10rem] max-w-[10rem] min-w-0">
+                      <button
+                        type="button"
+                        onClick={(e) => startEditNote(item.id, item.note ?? null, e.currentTarget.getBoundingClientRect())}
+                        className="inline-flex w-full max-w-full items-center justify-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors min-h-[28px] min-w-0"
+                      >
+                        <Pencil className="h-3 w-3 shrink-0 opacity-60" />
+                        <span
+                          className="min-w-0 max-w-[calc(100%-1.25rem)] truncate text-center"
+                          title={item.note?.trim() || undefined}
                         >
-                          <Pencil className="h-3 w-3 shrink-0 opacity-60" />
-                          <span className="line-clamp-2 max-w-[140px]">
-                            {item.note?.trim() || 'Add note'}
-                          </span>
-                        </button>
-                      )}
+                          {item.note?.trim() ? item.note.trim() : 'เพิ่มหมายเหตุ'}
+                        </span>
+                      </button>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-36 bg-purple-100">
+                    <td className="px-2 py-5 align-middle text-center w-[7.1rem] max-w-[7.1rem] bg-purple-100">
                       {item.register_url ? (
                         <a
                           href={item.register_url}
                           target="_blank"
                           rel="noopener noreferrer"
                           title={item.register_url}
-                          className="inline-flex items-center gap-1 text-indigo-600 hover:text-indigo-700 hover:underline text-xs font-medium"
+                          className="inline-flex items-center justify-center gap-1 rounded-md px-1 py-1 text-sm font-medium text-indigo-600 hover:bg-indigo-50 hover:text-indigo-700 hover:underline"
                         >
                           <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                           Link
                         </a>
                       ) : (
-                        <span className="text-muted">-</span>
+                        <span className="text-muted text-xs">-</span>
                       )}
                     </td>
-                    <td className="px-6 py-5 align-middle text-center">
+                    <td className="px-2 py-5 align-middle text-center w-[8.9rem] max-w-[8.9rem]">
                       {(() => {
                         const requestPrice = item.lastBid?.price ?? 0
                         const showBid = requestPrice > 0 && requestPrice < item.currentPrice
-                        if (!showBid) return <span className="text-muted">—</span>
+                        if (!showBid) return <span className="text-muted text-xs">—</span>
                         const isBidding = biddingId === item.id
                         return (
                           <button
                             type="button"
                             onClick={() => openBidModal(item)}
                             disabled={isBidding}
-                            className="inline-flex items-center gap-1.5 rounded-xl bg-purple-600 px-4 py-2 text-xs font-semibold text-white hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                            className="inline-flex items-center justify-center gap-0.5 rounded-lg bg-purple-600 px-2 py-1.5 text-xs font-semibold leading-tight text-white hover:bg-purple-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                            title="Bid"
                           >
                             {isBidding ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <Loader2 className="h-3 w-3 animate-spin" />
                             ) : (
-                              <TrendingUp className="h-4 w-4" />
+                              <TrendingUp className="h-3 w-3" />
                             )}
-                            Bid
-                            <ChevronDown className="h-4 w-4 opacity-70" />
+                            <span>Bid</span>
                           </button>
                         )
                       })()}
@@ -699,7 +774,7 @@ function OpenBidForUserPageContent() {
                 ))}
                 {filtered.length === 0 && !isLoading && (
                   <tr>
-                    <td colSpan={12} className="px-6 py-16 text-center align-middle">
+                    <td colSpan={isBuyout ? 11 : 13} className="px-6 py-16 text-center align-middle">
                       <p className="text-sakura-500 font-medium">
                         {filterUser ? `No bids found for "${filterUser}"` : 'No data'}
                       </p>
@@ -708,7 +783,7 @@ function OpenBidForUserPageContent() {
                           ? 'Try a different search term'
                           : purchaseModeFromUrl === 'BUYOUT'
                             ? 'กดปุ่มกดเว็ปเพื่อเพิ่มรายการ'
-                            : 'กดปุ่ม Auction เพื่อเพิ่มรายการ'}
+                            : 'กดปุ่มประมูลเพื่อเพิ่มรายการ'}
                       </p>
                     </td>
                   </tr>
@@ -732,7 +807,7 @@ function OpenBidForUserPageContent() {
           >
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-bold text-sakura-900">
-                {purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'Auction'}
+                {purchaseModeFromUrl === 'BUYOUT' ? 'กดเว็ป' : 'ประมูล'}
               </h2>
               <button
                 type="button"
@@ -793,13 +868,13 @@ function OpenBidForUserPageContent() {
 
                 <div>
                   <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                    ชื่อผู้ใช้ <span className="text-red-400">*</span>
+                    ชื่อผู้ใช้ลูกค้า <span className="text-muted font-normal">(ไม่บังคับ)</span>
                   </label>
                   <input
                     type="text"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="ชื่อผู้ใช้ลูกค้า"
+                    placeholder="ถ้าระบุและตรง user ในระบบจะผูกคำขอ"
                     autoComplete="off"
                     className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
                                focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
@@ -829,6 +904,27 @@ function OpenBidForUserPageContent() {
                     />
                   </div>
                 </div>
+
+                {buyoutTab === 'mercari' && (
+                  <div>
+                    <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                      ราคารายการ Mercari (เยน) <span className="text-red-400">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={mercariItemJpy}
+                        onChange={(e) => setMercariItemJpy(e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="ราคาสินค้าจากหน้ารายการ"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                   bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                   focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {buyoutTab === 'general_web' && (
                   <>
@@ -879,22 +975,33 @@ function OpenBidForUserPageContent() {
 
                 <div>
                   <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                    โอนมาแล้ว (เยน)
+                    ยอดที่ลูกค้าโอนแล้ว (บาท)
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">฿</span>
                     <input
                       type="text"
-                      inputMode="numeric"
-                      value={transferredYen}
-                      onChange={(e) => setTransferredYen(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="จำนวนเงินที่โอน (ไม่บังคับ)"
+                      inputMode="decimal"
+                      value={paidThb}
+                      onChange={(e) => setPaidThb(e.target.value.replace(/[^0-9.]/g, ''))}
+                      placeholder="ไม่โอนให้เว้นว่าง — ถ้ามียอดต้องแนบสลิป"
                       className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
                                  bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
                                  focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
                     />
                   </div>
-                  <p className="mt-1.5 text-xs text-muted">กรอกเป็นจำนวนเยน (¥) หากยังไม่โอนให้เว้นว่าง</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                    สลิปโอนเงิน {paidThb.replace(/[^0-9]/g, '') !== '' && Number(paidThb.replace(/[^0-9.]/g, '')) > 0 ? <span className="text-red-400">*</span> : <span className="text-muted font-normal">(ถ้ามียอดบาท)</span>}
+                  </label>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) => setSlipFile(e.target.files?.[0] ?? null)}
+                    className="w-full text-sm text-sakura-900 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-xs file:font-medium"
+                  />
                 </div>
 
                 <fieldset className="space-y-2.5">
@@ -969,9 +1076,39 @@ function OpenBidForUserPageContent() {
                   </button>
                 </div>
 
+                <fieldset className="space-y-2 rounded-xl border border-indigo-200/60 bg-indigo-50/40 p-3">
+                  <legend className="text-sm font-medium text-sakura-900 px-1">รูปแบบคำขอ</legend>
+                  <label className="flex items-start gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="auction-intent"
+                      checked={auctionUiIntent === 'open_bid'}
+                      onChange={() => setAuctionUiIntent('open_bid')}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-medium text-sakura-900">เปิดประมูล</span>
+                      <span className="block text-xs text-muted">ระบุราคาเปิด (เยน) — รอดำเนินการประมูล</span>
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 cursor-pointer text-sm">
+                    <input
+                      type="radio"
+                      name="auction-intent"
+                      checked={auctionUiIntent === 'paid_instant'}
+                      onChange={() => setAuctionUiIntent('paid_instant')}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="font-medium text-sakura-900">ชำระแล้ว (จบดีลทันที)</span>
+                      <span className="block text-xs text-muted">ยอดบาท + สลิป — ไม่ใช้ราคาเปิดประมูล</span>
+                    </span>
+                  </label>
+                </fieldset>
+
                 <div>
                   <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                    ผู้ใช้งาน <span className="text-red-400">*</span>
+                    ชื่อผู้ใช้ลูกค้า <span className="text-muted font-normal">(ไม่บังคับ)</span>
                   </label>
                   <input
                     type="text"
@@ -979,8 +1116,8 @@ function OpenBidForUserPageContent() {
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder={
                       auctionTab === 'yahoo'
-                        ? 'ผู้ใช้งาน Yahoo Auctions'
-                        : 'ผู้ใช้งาน Mercari'
+                        ? 'Yahoo Auctions / ระบุถ้ามี'
+                        : 'Mercari / ระบุถ้ามี'
                     }
                     autoComplete="off"
                     className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
@@ -1010,46 +1147,79 @@ function OpenBidForUserPageContent() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                    โอนมาแล้ว (เยน)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={transferredYen}
-                      onChange={(e) => setTransferredYen(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="จำนวนที่โอน (ไม่บังคับ)"
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
-                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
-                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
-                    />
+                {auctionTab === 'mercari' && (
+                  <div>
+                    <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                      ราคารายการ Mercari (เยน) <span className="text-red-400">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={mercariItemJpy}
+                        onChange={(e) => setMercariItemJpy(e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="ราคาจากหน้ารายการ"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                   bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                   focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                      />
+                    </div>
                   </div>
-                </div>
+                )}
 
-                <div>
-                  <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                    ราคาเปิดประมูล (เยน)
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={firstBidPrice}
-                      onChange={(e) => setFirstBidPrice(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="เช่น 5000 (ไม่บังคับ)"
-                      className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
-                                 bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
-                                 focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
-                    />
+                {auctionUiIntent === 'open_bid' ? (
+                  <div>
+                    <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                      ราคาเปิดประมูล (เยน) <span className="text-red-400">*</span>
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={firstBidPrice}
+                        onChange={(e) => setFirstBidPrice(e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="เช่น 5000"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                   bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                   focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                      />
+                    </div>
                   </div>
-                  <p className="mt-1.5 text-xs text-muted">
-                    กรอกอย่างน้อยหนึ่งช่องระหว่างโอนมาแล้วกับราคาเปิดประมูล
-                  </p>
-                </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                        ยอดที่ลูกค้าโอนแล้ว (บาท) <span className="text-red-400">*</span>
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">฿</span>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={paidThb}
+                          onChange={(e) => setPaidThb(e.target.value.replace(/[^0-9.]/g, ''))}
+                          placeholder="เช่น 15000"
+                          className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                                     bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                                     focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                        สลิปโอนเงิน <span className="text-red-400">*</span>
+                      </label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => setSlipFile(e.target.files?.[0] ?? null)}
+                        className="w-full text-sm text-sakura-900 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-xs file:font-medium"
+                      />
+                    </div>
+                  </>
+                )}
 
                 <fieldset className="space-y-2.5">
                   <legend className="block text-sm font-medium text-sakura-900 mb-1.5">
@@ -1140,16 +1310,16 @@ function OpenBidForUserPageContent() {
 
             <div className="mb-4">
               <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-                Staff <span className="text-red-400">*</span>
+                ผู้ดำเนินการ (user) <span className="text-red-400">*</span>
               </label>
               <select
-                value={bidModalStaff}
-                onChange={(e) => setBidModalStaff(e.target.value)}
+                value={bidModalUserId}
+                onChange={(e) => setBidModalUserId(e.target.value)}
                 className="w-full rounded-xl border border-card-border bg-white px-4 py-3 text-sm text-sakura-900
                            focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-purple-300"
               >
-                <option value="">Select staff...</option>
-                {staffs.map((s) => (
+                <option value="">เลือกผู้ดำเนินการ...</option>
+                {teamUsers.map((s) => (
                   <option key={s.id} value={String(s.id)}>
                     {s.name}
                   </option>
@@ -1216,6 +1386,71 @@ function OpenBidForUserPageContent() {
           </div>
         </div>
       )}
+
+      {editingNoteId != null &&
+        notePopoverPos != null &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[200] bg-sakura-950/25"
+              aria-hidden
+              onClick={() => cancelEditNote()}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="note-popover-title"
+              className="fixed z-[210] flex max-h-[min(300px,calc(100vh-24px))] flex-col rounded-xl border border-sakura-200/90 bg-white p-3 shadow-lg ring-1 ring-black/5"
+              style={{
+                top: notePopoverPos.top,
+                left: notePopoverPos.left,
+                width: notePopoverPos.width,
+                maxWidth: 'min(240px, calc(100vw - 24px))',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p id="note-popover-title" className="text-xs font-semibold text-sakura-900 mb-1.5">
+                แก้ไขหมายเหตุ
+              </p>
+              <textarea
+                value={editingNoteValue}
+                onChange={(e) => setEditingNoteValue(e.target.value.slice(0, 2000))}
+                placeholder="พิมพ์หมายเหตุ..."
+                rows={4}
+                maxLength={2000}
+                className="w-full min-h-[72px] flex-1 rounded-lg border border-sakura-200 px-2 py-1.5 text-xs resize-y
+                           focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+                autoFocus
+              />
+              <p className="text-[10px] text-muted mt-1 mb-2 tabular-nums">
+                {editingNoteValue.length} / 2000
+              </p>
+              <div className="flex gap-1.5 justify-end border-t border-sakura-100 pt-2">
+                <button
+                  type="button"
+                  onClick={() => cancelEditNote()}
+                  className="rounded-lg border border-sakura-200 px-2 py-1 text-[11px] font-medium text-sakura-700 hover:bg-sakura-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveNote()}
+                  disabled={noteSaving}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {noteSaving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
+                  บันทึก
+                </button>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   )
 }

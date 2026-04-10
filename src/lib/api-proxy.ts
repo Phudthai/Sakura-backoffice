@@ -37,3 +37,30 @@ export async function proxyToBackend(
     )
   }
 }
+
+/**
+ * Forward multipart/form-data (e.g. purchase-requests with payload + slip) without forcing JSON Content-Type.
+ */
+export async function proxyFormDataToBackend(request: NextRequest, path: string) {
+  const token = request.cookies.get(COOKIE_NAME)?.value
+  const formData = await request.formData()
+  const headers: Record<string, string> = {}
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    const data = await res.json()
+    return NextResponse.json(data, { status: res.status })
+  } catch (error) {
+    console.error(`[API Proxy multipart] ${path}`, error)
+    return NextResponse.json(
+      { success: false, error: { code: 'PROXY_ERROR', message: 'Backend unreachable' } },
+      { status: 502 }
+    )
+  }
+}

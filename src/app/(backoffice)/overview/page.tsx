@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import { purchaseModeLabelTh } from '@/lib/purchase-mode-label'
 import { formatPrice } from '@/lib/utils'
 import { Loader2 } from 'lucide-react'
 
@@ -75,11 +76,19 @@ interface OverviewStatsData {
     purchaseMode?: string
     status?: string
     intlShippingType?: string
-    boughtAtRangeBangkok?: { start?: string; end?: string }
+    boughtAtRangeBangkok?: {
+      start?: string
+      end?: string
+      endExclusive?: string
+    }
   }
+  /** จำนวนสินค้า (completed ในช่วงที่เลือก) */
+  itemCount?: number
   totalGrams: number
   product: MoneyBreakdown
   intlShipping: MoneyBreakdown
+  /** ค่าส่งในประเทศรวม */
+  domesticShipping?: MoneyBreakdown
 }
 
 type PurchaseModeFilter = 'all' | 'AUCTION' | 'BUYOUT'
@@ -309,9 +318,9 @@ export default function OverviewPage() {
               className="rounded-xl border border-card-border bg-white px-4 py-2.5 text-sm text-sakura-900
                          focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
             >
-              <option value="all">ทั้งหมด (ประมูล + ซื้อทันที)</option>
-              <option value="AUCTION">AUCTION</option>
-              <option value="BUYOUT">BUYOUT</option>
+              <option value="all">ทั้งหมด (ประมูล + กดเว็ป)</option>
+              <option value="AUCTION">ประมูล</option>
+              <option value="BUYOUT">กดเว็ป</option>
             </select>
           </div>
         </div>
@@ -341,31 +350,44 @@ export default function OverviewPage() {
                 ? `เดือน ${stats.scope.year}-${stats.scope.month} (Bangkok)`
                 : '—'}
               {stats.scope.purchaseMode && stats.scope.purchaseMode !== 'all'
-                ? ` · ${stats.scope.purchaseMode}`
+                ? ` · ${purchaseModeLabelTh(stats.scope.purchaseMode)}`
                 : ''}
               {stats.scope.status ? ` · ${stats.scope.status}` : ''}
             </span>
           </p>
           {stats.scope.boughtAtRangeBangkok &&
             (stats.scope.boughtAtRangeBangkok.start ||
-              stats.scope.boughtAtRangeBangkok.end) && (
+              stats.scope.boughtAtRangeBangkok.end ||
+              stats.scope.boughtAtRangeBangkok.endExclusive) && (
               <p className="text-xs text-muted">
                 ช่วง bought_at:{' '}
                 {stats.scope.boughtAtRangeBangkok.start ?? '—'} —{' '}
-                {stats.scope.boughtAtRangeBangkok.end ?? '—'}
+                {stats.scope.boughtAtRangeBangkok.end ??
+                  stats.scope.boughtAtRangeBangkok.endExclusive ??
+                  '—'}
               </p>
             )}
 
-          <div className="rounded-2xl border border-sakura-200/60 bg-white shadow-card p-6">
-            <p className="text-xs font-medium text-sakura-600 uppercase tracking-wider mb-1">
-              น้ำหนักรวม (กรัม)
-            </p>
-            <p className="text-2xl font-bold text-sakura-900 tabular-nums">
-              {formatPrice(stats.totalGrams)}
-            </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-2xl border border-sakura-200/60 bg-white shadow-card p-6">
+              <p className="text-xs font-medium text-sakura-600 uppercase tracking-wider mb-1">
+                น้ำหนักรวม (กรัม)
+              </p>
+              <p className="text-2xl font-bold text-sakura-900 tabular-nums">
+                {formatPrice(stats.totalGrams)}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-sakura-200/60 bg-white shadow-card p-6">
+              <p className="text-xs font-medium text-sakura-600 uppercase tracking-wider mb-1">
+                จำนวนสินค้า
+              </p>
+              <p className="text-2xl font-bold text-sakura-900 tabular-nums">
+                {formatPrice(stats.itemCount ?? 0)}
+              </p>
+            </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-2xl border border-emerald-200/80 bg-emerald-50/50 p-6 shadow-sm">
               <h2 className="text-sm font-semibold text-emerald-900 mb-4">
                 สินค้า (PRODUCT_FULL)
@@ -413,6 +435,35 @@ export default function OverviewPage() {
                   <dt className="text-muted">ค้างชำระ</dt>
                   <dd className="font-semibold tabular-nums text-amber-800">
                     {formatBaht(stats.intlShipping.outstandingBaht)}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+
+            <div className="rounded-2xl border border-violet-200/80 bg-violet-50/50 p-6 shadow-sm md:col-span-2 lg:col-span-1">
+              <h2 className="text-sm font-semibold text-violet-900">
+                ค่าส่งในไทยรวม (DOMESTIC_SHIPPING)
+              </h2>
+              <p className="text-xs text-violet-800/80 mt-1 mb-4">
+                หมายเหตุ: ยอดนี้รวมทั้ง Air และ Sea
+              </p>
+              <dl className="space-y-3 text-sm">
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted">ยอดรวม</dt>
+                  <dd className="font-semibold tabular-nums text-sakura-900">
+                    {formatBaht(stats.domesticShipping?.totalBaht ?? 0)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted">ชำระแล้ว</dt>
+                  <dd className="font-semibold tabular-nums text-emerald-800">
+                    {formatBaht(stats.domesticShipping?.paidBaht ?? 0)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4">
+                  <dt className="text-muted">ค้างชำระ</dt>
+                  <dd className="font-semibold tabular-nums text-amber-800">
+                    {formatBaht(stats.domesticShipping?.outstandingBaht ?? 0)}
                   </dd>
                 </div>
               </dl>

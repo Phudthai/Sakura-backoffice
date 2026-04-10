@@ -47,15 +47,8 @@ const NAV_CONFIG: readonly NavEntry[] = [
   {
     kind: "link",
     id: "purchased",
-    href: "/auctions/completed",
-    label: "การจัดการสินค้าที่ซื้อแล้ว",
-    icon: Package,
-  },
-  {
-    kind: "link",
-    id: "purchased-v2",
     href: "/auctions/completed-v2",
-    label: "การจัดการสินค้าที่ซื้อแล้ว v2",
+    label: "การจัดการสินค้าที่ซื้อแล้ว",
     icon: Package,
   },
   {

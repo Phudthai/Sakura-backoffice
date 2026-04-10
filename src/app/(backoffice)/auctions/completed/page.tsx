@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
+import { purchaseModeLabelTh } from '@/lib/purchase-mode-label'
 import Image from 'next/image'
 import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
@@ -545,9 +546,9 @@ export default function CompletedAuctionsPage() {
               className="min-w-[12rem] rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
                          focus:outline-none focus:ring-2 focus:ring-indigo-200"
             >
-              <option value="">ทั้งหมด (ประมูล + ซื้อทันที)</option>
-              <option value="AUCTION">AUCTION</option>
-              <option value="BUYOUT">BUYOUT</option>
+              <option value="">ทั้งหมด (ประมูล + กดเว็ป)</option>
+              <option value="AUCTION">ประมูล</option>
+              <option value="BUYOUT">กดเว็ป</option>
             </select>
           </div>
         </div>
@@ -882,7 +883,7 @@ export default function CompletedAuctionsPage() {
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-28">
                       <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                        {item.purchaseMode ?? '—'}
+                        {purchaseModeLabelTh(item.purchaseMode)}
                       </span>
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-40">

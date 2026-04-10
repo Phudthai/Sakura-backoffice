@@ -5,16 +5,17 @@ import { X, Link2, Send } from 'lucide-react'
 import {
   submitBuyoutFlow,
   type BuyoutFormTab,
+  type ClientEntry,
   type IntlShippingChoice,
 } from '@/lib/buyout-request'
 
 type Props = {
   open: boolean
   onClose: () => void
-  /** เรียกหลังสร้างคำขอสำเร็จ (เช่น refresh รายการ) */
   onSuccess: () => void
-  /** ค่าเริ่มต้นช่องชื่อลูกค้า (เช่น จาก filter ชื่อลูกค้าหน้ารายการ) */
   initialUsername?: string
+  /** บริบทการสร้างคำขอ (ส่งไป backend เป็น client_entry) */
+  clientEntry?: ClientEntry
 }
 
 export default function BuyoutAddProductModal({
@@ -22,11 +23,14 @@ export default function BuyoutAddProductModal({
   onClose,
   onSuccess,
   initialUsername = '',
+  clientEntry = 'not_arrived_japan',
 }: Props) {
   const [url, setUrl] = useState('')
   const [intlShippingType, setIntlShippingType] = useState<IntlShippingChoice | null>(null)
   const [username, setUsername] = useState('')
-  const [transferredYen, setTransferredYen] = useState('')
+  const [paidThb, setPaidThb] = useState('')
+  const [slipFile, setSlipFile] = useState<File | null>(null)
+  const [mercariItemJpy, setMercariItemJpy] = useState('')
   const [buyoutTab, setBuyoutTab] = useState<BuyoutFormTab>('yahoo')
   const [productTitle, setProductTitle] = useState('')
   const [siteName, setSiteName] = useState('')
@@ -40,7 +44,9 @@ export default function BuyoutAddProductModal({
     setUrl('')
     setIntlShippingType(null)
     setUsername(initialUsername.trim())
-    setTransferredYen('')
+    setPaidThb('')
+    setSlipFile(null)
+    setMercariItemJpy('')
     setBuyoutTab('yahoo')
     setProductTitle('')
     setSiteName('')
@@ -63,22 +69,29 @@ export default function BuyoutAddProductModal({
       }
       const shippingType = intlShippingType
       const uname = username.trim()
-      if (!uname) {
-        setFormError('กรุณากรอกชื่อลูกค้า')
-        return
-      }
       const u = url.trim()
       if (!u) {
         setFormError('กรุณากรอกลิงก์สินค้า')
         return
       }
-      const transferDigits = transferredYen.replace(/[^0-9]/g, '')
-      const transferAmount =
-        transferDigits === '' ? undefined : Number(transferDigits)
-      if (transferDigits !== '' && (transferAmount === undefined || transferAmount < 0)) {
-        setFormError('กรุณากรอกจำนวนเงินโอน (เยน) ให้ถูกต้อง')
+      const paidDigits = paidThb.replace(/[^0-9.]/g, '').replace(/\./g, '')
+      const paidAmount = paidDigits === '' ? 0 : Number(paidDigits)
+      const mercariDigits = mercariItemJpy.replace(/[^0-9]/g, '')
+      const mercariJpy = mercariDigits === '' ? undefined : Number(mercariDigits)
+
+      if (buyoutTab === 'mercari' && (mercariJpy == null || mercariJpy <= 0)) {
+        setFormError('Mercari ต้องระบุราคารายการ (เยน)')
         return
       }
+      if (paidAmount < 0) {
+        setFormError('จำนวนเงิน (บาท) ไม่ถูกต้อง')
+        return
+      }
+      if (paidAmount > 0 && !slipFile) {
+        setFormError('กรุณาแนบสลิปเมื่อระบุยอดที่โอน (บาท)')
+        return
+      }
+
       if (buyoutTab === 'general_web') {
         const pt = productTitle.trim()
         const sn = siteName.trim()
@@ -97,21 +110,26 @@ export default function BuyoutAddProductModal({
         }
         await submitBuyoutFlow({
           buyoutTab: 'general_web',
-          username: uname,
+          username: uname || undefined,
           url: u,
-          transferredYen: transferAmount,
           intl_shipping_type: shippingType,
-          productTitle: pt,
-          siteName: sn,
-          priceYen: Number(py),
+          client_entry: clientEntry,
+          paidThb: paidAmount > 0 ? paidAmount : undefined,
+          slip: paidAmount > 0 ? slipFile : undefined,
+          product_title: pt,
+          site_name: sn,
+          first_bid_price: Number(py),
         })
       } else {
         await submitBuyoutFlow({
           buyoutTab,
-          username: uname,
+          username: uname || undefined,
           url: u,
-          transferredYen: transferAmount,
           intl_shipping_type: shippingType,
+          client_entry: clientEntry,
+          paidThb: paidAmount > 0 ? paidAmount : undefined,
+          slip: paidAmount > 0 ? slipFile : undefined,
+          item_price_jpy: buyoutTab === 'mercari' ? mercariJpy : undefined,
         })
       }
       handleClose()
@@ -195,13 +213,13 @@ export default function BuyoutAddProductModal({
 
           <div>
             <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-              ชื่อลูกค้า <span className="text-red-400">*</span>
+              ชื่อลูกค้า <span className="text-muted font-normal">(ไม่บังคับ)</span>
             </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="ชื่อลูกค้า"
+              placeholder="ถ้าระบุและตรง user ในระบบจะผูกคำขอ"
               autoComplete="off"
               className="w-full px-4 py-3 rounded-xl border border-card-border bg-sakura-50/50 text-sakura-900 text-sm
                          focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
@@ -231,6 +249,27 @@ export default function BuyoutAddProductModal({
               />
             </div>
           </div>
+
+          {buyoutTab === 'mercari' && (
+            <div>
+              <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+                ราคารายการ Mercari (เยน) <span className="text-red-400">*</span>
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={mercariItemJpy}
+                  onChange={(e) => setMercariItemJpy(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="ราคาจากหน้ารายการ"
+                  className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
+                             bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
+                             focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
+                />
+              </div>
+            </div>
+          )}
 
           {buyoutTab === 'general_web' && (
             <>
@@ -281,22 +320,38 @@ export default function BuyoutAddProductModal({
 
           <div>
             <label className="block text-sm font-medium text-sakura-900 mb-1.5">
-              โอนมาแล้ว (เยน)
+              ยอดที่ลูกค้าโอนแล้ว (บาท)
             </label>
             <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">¥</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted font-medium">฿</span>
               <input
                 type="text"
-                inputMode="numeric"
-                value={transferredYen}
-                onChange={(e) => setTransferredYen(e.target.value.replace(/[^0-9]/g, ''))}
-                placeholder="จำนวนเงินที่โอน (ไม่บังคับ)"
+                inputMode="decimal"
+                value={paidThb}
+                onChange={(e) => setPaidThb(e.target.value.replace(/[^0-9.]/g, ''))}
+                placeholder="ไม่โอนให้เว้นว่าง — ถ้ามียอดต้องแนบสลิป"
                 className="w-full pl-10 pr-4 py-3 rounded-xl border border-card-border
                            bg-sakura-50/50 text-sakura-900 text-sm placeholder:text-muted
                            focus:outline-none focus:ring-2 focus:ring-sakura-400 focus:border-transparent"
               />
             </div>
-            <p className="mt-1.5 text-xs text-muted">กรอกเป็นจำนวนเยน (¥) หากยังไม่โอนให้เว้นว่าง</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-sakura-900 mb-1.5">
+              สลิปโอนเงิน{' '}
+              {paidThb.replace(/[^0-9]/g, '') !== '' && Number(paidThb.replace(/[^0-9.]/g, '')) > 0 ? (
+                <span className="text-red-400">*</span>
+              ) : (
+                <span className="text-muted font-normal">(ถ้ามียอดบาท)</span>
+              )}
+            </label>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => setSlipFile(e.target.files?.[0] ?? null)}
+              className="w-full text-sm text-sakura-900 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-xs file:font-medium"
+            />
           </div>
 
           <fieldset className="space-y-2.5">

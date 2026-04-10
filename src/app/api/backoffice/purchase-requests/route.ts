@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server'
-import { proxyToBackend } from '@/lib/api-proxy'
+import { proxyFormDataToBackend, proxyToBackend } from '@/lib/api-proxy'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 
 export async function GET(request: NextRequest) {
@@ -9,6 +9,10 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const contentType = request.headers.get('content-type') ?? ''
+  if (contentType.includes('multipart/form-data')) {
+    return proxyFormDataToBackend(request, `${API_BACKOFFICE_PREFIX}/purchase-requests`)
+  }
   const body = await request.json()
   return proxyToBackend(request, `${API_BACKOFFICE_PREFIX}/purchase-requests`, { method: 'POST', body })
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, Suspense } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
 import Image from 'next/image'
@@ -27,6 +27,48 @@ interface AuctionRequest {
   isPaid?: boolean
   domestic_shipping_baht?: number | null
   purchaseMode?: string
+  site_name?: string
+  siteName?: string
+  webName?: string
+  web_name?: string
+  intl_shipping_type?: string | null
+  intlShippingType?: string | null
+  /** ราคาเป็นบาท — จาก API */
+  currentPriceBaht?: number | null
+  current_price_baht?: number | null
+}
+
+function siteNameFromCompletedItem(item: AuctionRequest): string {
+  const raw = item.webName ?? item.web_name ?? item.siteName ?? item.site_name
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  if (item.url) {
+    try {
+      return new URL(item.url).hostname.replace(/^www\./, '')
+    } catch {
+      return '—'
+    }
+  }
+  return '—'
+}
+
+function priceBahtFromItem(item: AuctionRequest): number | null {
+  const c = item.currentPriceBaht ?? item.current_price_baht
+  if (typeof c === 'number' && Number.isFinite(c)) return c
+  return null
+}
+
+function intlShippingLabelTh(item: AuctionRequest): string {
+  const r = item as unknown as Record<string, unknown>
+  const v =
+    item.intl_shipping_type ??
+    item.intlShippingType ??
+    (typeof r.intlShippingType === 'string' ? r.intlShippingType : null) ??
+    (typeof r.intl_shipping_type === 'string' ? r.intl_shipping_type : null)
+  if (v == null || String(v).trim() === '') return '—'
+  const u = String(v).trim().toLowerCase()
+  if (u === 'air') return 'ทางอากาศ'
+  if (u === 'sea') return 'ทางเรือ'
+  return String(v)
 }
 
 interface DomesticShippingQueueItem {
@@ -70,6 +112,42 @@ interface UserItemsResponse {
 interface ShippingLotOption {
   id: number
   lot_code: string
+}
+
+/** จาก GET /api/backoffice/users?role=customer — ใช้ค้นหา + dropdown */
+interface CustomerPick {
+  id: number
+  userCode: string | null
+  username: string | null
+  name: string
+  email: string
+}
+
+function normalizeCustomerPick(raw: unknown): CustomerPick | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const idRaw = r.id
+  const id = typeof idRaw === 'number' ? idRaw : Number(idRaw)
+  if (!Number.isFinite(id)) return null
+  const name =
+    (typeof r.name === 'string' && r.name) ||
+    (typeof r.fullName === 'string' && r.fullName) ||
+    (typeof r.displayName === 'string' && r.displayName) ||
+    '-'
+  return {
+    id,
+    userCode: typeof r.userCode === 'string' ? r.userCode : (r.user_code as string | null) ?? null,
+    username: typeof r.username === 'string' ? r.username : (r.user_name as string | null) ?? null,
+    email: typeof r.email === 'string' ? r.email : '',
+    name,
+  }
+}
+
+function customerPickMatchesQuery(c: CustomerPick, q: string): boolean {
+  const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return false
+  const fields = [c.userCode, c.username, c.name, c.email].map((s) => (s ?? '').toLowerCase())
+  return tokens.every((token) => fields.some((f) => f.includes(token)))
 }
 
 type ActiveTab = 'not_arrived' | 'shipping' | 'arrived_th'
@@ -157,6 +235,10 @@ function CompletedAuctionsPageContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [filterUser, setFilterUser] = useState('')
+  const [customers, setCustomers] = useState<CustomerPick[]>([])
+  const [loadingCustomers, setLoadingCustomers] = useState(false)
+  const [customerDdOpen, setCustomerDdOpen] = useState(false)
+  const customerSearchBlurRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
   const [editingNoteValue, setEditingNoteValue] = useState('')
   const [noteSaving, setNoteSaving] = useState(false)
@@ -206,6 +288,47 @@ function CompletedAuctionsPageContent() {
       }
     }
   }, [usernameFromUrl])
+
+  const fetchCustomers = useCallback(async () => {
+    setLoadingCustomers(true)
+    try {
+      const qs = new URLSearchParams({ role: 'customer' })
+      const res = await fetch(`${API_BACKOFFICE_PREFIX}/users?${qs}`, {
+        credentials: 'include',
+      })
+      const json = await res.json()
+      if (json.success && Array.isArray(json.data)) {
+        const rows = json.data
+          .map(normalizeCustomerPick)
+          .filter((c: CustomerPick | null): c is CustomerPick => c != null)
+        setCustomers(rows)
+      } else {
+        setCustomers([])
+      }
+    } catch {
+      setCustomers([])
+    } finally {
+      setLoadingCustomers(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchCustomers()
+  }, [fetchCustomers])
+
+  useEffect(() => {
+    return () => {
+      if (customerSearchBlurRef.current != null) {
+        clearTimeout(customerSearchBlurRef.current)
+      }
+    }
+  }, [])
+
+  const customerSuggestions = useMemo(() => {
+    const q = filterUser.trim()
+    if (!q) return []
+    return customers.filter((c) => customerPickMatchesQuery(c, q)).slice(0, 40)
+  }, [customers, filterUser])
 
   const isNotArrivedTab = activeTab === 'not_arrived'
   const isShippingTab = activeTab === 'shipping'
@@ -583,9 +706,9 @@ function CompletedAuctionsPageContent() {
               className="min-w-[12rem] rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
                          focus:outline-none focus:ring-2 focus:ring-indigo-200"
             >
-              <option value="">ทั้งหมด (ประมูล + ซื้อทันที)</option>
-              <option value="AUCTION">AUCTION</option>
-              <option value="BUYOUT">BUYOUT</option>
+              <option value="">ทั้งหมด (ประมูล + กดเว็ป)</option>
+              <option value="AUCTION">ประมูล</option>
+              <option value="BUYOUT">กดเว็ป</option>
             </select>
           </div>
           {!isShippingTab && (
@@ -708,16 +831,73 @@ function CompletedAuctionsPageContent() {
       )}
 
       <div className="mb-5 flex items-center justify-between gap-4 flex-wrap">
-        <div className="relative w-72">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
+        <div className="relative w-full max-w-md min-w-[18rem]">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none z-[1]" />
+          {loadingCustomers && (
+            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted pointer-events-none z-[1]" />
+          )}
           <input
             type="text"
+            autoComplete="off"
             value={filterUser}
-            onChange={(e) => setFilterUser(e.target.value)}
-            placeholder={isArrivedThTab ? 'ค้นหาตาม User Name หรือ User ID...' : 'ค้นหาตามชื่อสินค้า, User Name หรือ User ID...'}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-card-border bg-white text-sm
+            onChange={(e) => {
+              setFilterUser(e.target.value)
+              setCustomerDdOpen(true)
+            }}
+            onFocus={() => setCustomerDdOpen(true)}
+            onBlur={() => {
+              if (customerSearchBlurRef.current != null) {
+                clearTimeout(customerSearchBlurRef.current)
+              }
+              customerSearchBlurRef.current = setTimeout(() => setCustomerDdOpen(false), 200)
+            }}
+            placeholder={
+              isArrivedThTab
+                ? 'พิมพ์เพื่อเลือกลูกค้าหรือค้นหา User…'
+                : 'พิมพ์เพื่อเลือกลูกค้า หรือค้นหาสินค้า / User…'
+            }
+            className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-card-border bg-white text-sm
                        placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-shadow"
+            aria-expanded={Boolean(
+              customerDdOpen && filterUser.trim().length > 0 && customerSuggestions.length > 0
+            )}
+            aria-controls="completed-v2-customer-suggest"
+            aria-autocomplete="list"
           />
+          {customerDdOpen &&
+            filterUser.trim().length > 0 &&
+            customerSuggestions.length > 0 && (
+              <ul
+                id="completed-v2-customer-suggest"
+                role="listbox"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-card-border bg-white py-1 shadow-lg"
+              >
+                {customerSuggestions.map((c) => {
+                  const line1 = c.name
+                  const line2 = [c.userCode, c.username, c.email].filter(Boolean).join(' · ')
+                  return (
+                    <li key={c.id} role="option">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-sakura-50 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          const v =
+                            c.username?.trim() || c.userCode?.trim() || c.name.trim() || ''
+                          setFilterUser(v)
+                          setCustomerDdOpen(false)
+                        }}
+                      >
+                        <span className="font-medium text-sakura-900 block truncate">{line1}</span>
+                        {line2 ? (
+                          <span className="text-xs text-muted-dark block truncate font-mono">{line2}</span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
         </div>
         <div className="flex flex-wrap gap-4 min-h-[72px]">
           {!isNotArrivedTab && !isArrivedThTab ? (
@@ -792,17 +972,20 @@ function CompletedAuctionsPageContent() {
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-48">
                         สินค้า
                       </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                        ลิงก์ประมูล
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
+                        ลิงก์
                       </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28 whitespace-nowrap">
-                        โหมด
-                      </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        ราคาปัจจุบัน
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center min-w-[7rem] max-w-[10rem]">
+                        ชื่อเว็ป
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        ราคาที่ขอ
+                        ราคา(เยน)
+                      </th>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
+                        ราคา(บาท)
+                      </th>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-32 whitespace-nowrap">
+                        วิธีส่ง
                       </th>
                       {isShippingTab && (
                         <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
@@ -949,7 +1132,7 @@ function CompletedAuctionsPageContent() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-40">
+                    <td className="px-6 py-5 align-middle text-center w-36">
                       {item.url ? (
                         <a
                           href={item.url}
@@ -965,9 +1148,12 @@ function CompletedAuctionsPageContent() {
                         <span className="text-muted">-</span>
                       )}
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-28">
-                      <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                        {item.purchaseMode ?? '—'}
+                    <td className="px-6 py-5 align-middle text-center max-w-[10rem]">
+                      <span
+                        className="text-sm text-sakura-800 line-clamp-2 break-words"
+                        title={siteNameFromCompletedItem(item)}
+                      >
+                        {siteNameFromCompletedItem(item)}
                       </span>
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-40">
@@ -979,10 +1165,22 @@ function CompletedAuctionsPageContent() {
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-40">
                       <div className="flex min-h-[56px] w-full items-center justify-center">
-                        <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
-                          ¥{formatPrice(item.lastBid?.price ?? 0)}
-                        </span>
+                        {(() => {
+                          const baht = priceBahtFromItem(item)
+                          return baht != null ? (
+                            <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
+                              ฿{formatPrice(baht)}
+                            </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )
+                        })()}
                       </div>
+                    </td>
+                    <td className="px-6 py-5 align-middle text-center w-32">
+                      <span className="text-sm text-sakura-800 whitespace-nowrap">
+                        {intlShippingLabelTh(item)}
+                      </span>
                     </td>
                     {isShippingTab && (
                       <td className="px-6 py-5 align-middle text-center w-40">
@@ -1118,7 +1316,7 @@ function CompletedAuctionsPageContent() {
                 {!isArrivedThTab && filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={10}
                       className="px-6 py-16 text-center align-middle"
                     >
                       <p className="text-sakura-500 font-medium">
@@ -1257,6 +1455,7 @@ function CompletedAuctionsPageContent() {
         onClose={() => setAddProductModalOpen(false)}
         onSuccess={() => void fetchData()}
         initialUsername={addProductModalInitialUsername}
+        clientEntry="not_arrived_japan"
       />
     </div>
   )

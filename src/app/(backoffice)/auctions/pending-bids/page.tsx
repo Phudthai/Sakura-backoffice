@@ -12,7 +12,8 @@ interface PendingBid {
   price: number;
   bidCount: number;
   status: string;
-  staff: { id: number; name: string } | null;
+  bidder?: { id: number; name?: string; username?: string } | null;
+  staff?: { id: number; name: string } | null;
   recordedAt: string;
   auctionRequest?: {
     id: number;
@@ -28,7 +29,7 @@ interface PendingBid {
   };
 }
 
-interface StaffItem {
+interface BackofficeUserOption {
   id: number;
   name: string;
 }
@@ -91,12 +92,12 @@ function Countdown({ endISO }: { endISO?: string | null }) {
 
 export default function PendingBidsPage() {
   const [bids, setBids] = useState<PendingBid[]>([]);
-  const [staffs, setStaffs] = useState<StaffItem[]>([]);
+  const [teamUsers, setTeamUsers] = useState<BackofficeUserOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [filterUser, setFilterUser] = useState("");
   const [approvingId, setApprovingId] = useState<number | null>(null);
-  const [selectedStaff, setSelectedStaff] = useState("");
+  const [selectedBidderId, setSelectedBidderId] = useState("");
   const [rejectingId, setRejectingId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
@@ -106,17 +107,25 @@ export default function PendingBidsPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const [bidsRes, staffsRes] = await Promise.all([
-        fetch(`${API_BACKOFFICE_PREFIX}/pending-bids`),
-        fetch(`${API_BACKOFFICE_PREFIX}/staffs`),
+      const [bidsRes, usersRes] = await Promise.all([
+        fetch(`${API_BACKOFFICE_PREFIX}/pending-bids`, { credentials: "include" }),
+        fetch(`${API_BACKOFFICE_PREFIX}/users`, { credentials: "include" }),
       ]);
       const bidsJson = await bidsRes.json();
-      const staffsJson = await staffsRes.json();
+      const usersJson = await usersRes.json();
 
       if (bidsJson.success) setBids(bidsJson.data ?? []);
       else setError(bidsJson.error?.message ?? "Failed to load bids");
 
-      if (staffsJson.success) setStaffs(staffsJson.data ?? []);
+      if (usersJson.success) {
+        const list = (usersJson.data ?? []).map(
+          (u: { id: number; name?: string; username?: string }) => ({
+            id: Number(u.id),
+            name: (u.name ?? u.username ?? String(u.id)).trim() || String(u.id),
+          }),
+        );
+        setTeamUsers(list);
+      }
     } catch {
       setError("Network error");
     } finally {
@@ -148,19 +157,19 @@ export default function PendingBidsPage() {
     setEditingNoteArId(null);
     setEditingNoteValue("");
     setApprovingId(null);
-    setSelectedStaff("");
+    setSelectedBidderId("");
     setRejectingId(null);
     setRejectReason("");
   };
 
   const handleApprove = async (bidId: number) => {
-    if (!selectedStaff) return;
+    if (!selectedBidderId) return;
     setActionLoading(true);
     try {
       const res = await fetch(`/api/backoffice/bids/${bidId}/approve`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ biddedBy: Number(selectedStaff) }),
+        body: JSON.stringify({ biddedBy: Number(selectedBidderId) }),
       });
       const json = await res.json();
       if (json.success) {
@@ -422,12 +431,21 @@ export default function PendingBidsPage() {
                           >
                             {bid.status}
                           </span>
-                          {bid.staff && (
+                          {(bid.bidder ?? bid.staff) && (
                             <p
                               className="text-xs text-muted truncate max-w-full"
-                              title={bid.staff.name}
+                              title={
+                                bid.bidder
+                                  ? bid.bidder.name ?? bid.bidder.username
+                                  : bid.staff!.name
+                              }
                             >
-                              by {bid.staff.name}
+                              by{" "}
+                              {bid.bidder
+                                ? bid.bidder.name ??
+                                  bid.bidder.username ??
+                                  bid.bidder.id
+                                : bid.staff!.name}
                             </p>
                           )}
                         </div>
@@ -497,16 +515,16 @@ export default function PendingBidsPage() {
                           {isApproving && (
                             <div className="flex flex-col gap-2 min-w-[220px]">
                               <select
-                                value={selectedStaff}
+                                value={selectedBidderId}
                                 onChange={(e) =>
-                                  setSelectedStaff(e.target.value)
+                                  setSelectedBidderId(e.target.value)
                                 }
                                 className="rounded-lg border border-sakura-200 px-3 py-2 text-sm
                                          focus:outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-300"
                                 autoFocus
                               >
-                                <option value="">Select staff...</option>
-                                {staffs.map((s) => (
+                                <option value="">เลือกผู้ดำเนินการ (user)...</option>
+                                {teamUsers.map((s) => (
                                   <option key={s.id} value={s.id}>
                                     {s.name}
                                   </option>
@@ -515,7 +533,7 @@ export default function PendingBidsPage() {
                               <div className="flex gap-2">
                                 <button
                                   onClick={() => handleApprove(bid.id)}
-                                  disabled={!selectedStaff || actionLoading}
+                                  disabled={!selectedBidderId || actionLoading}
                                   className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white
                                            hover:bg-emerald-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
