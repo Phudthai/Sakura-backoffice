@@ -1,11 +1,11 @@
-import { Suspense } from 'react'
-import Sidebar from '@/components/backoffice/sidebar'
-import BackofficeHeader from '@/components/backoffice/header'
+import { Suspense } from "react";
+import Sidebar from "@/components/backoffice/sidebar";
+import BackofficeHeader from "@/components/backoffice/header";
 
 export default function BackofficeLayout({
   children,
 }: {
-  children: React.ReactNode
+  children: React.ReactNode;
 }) {
   return (
     <div className="min-h-screen bg-body">
@@ -21,5 +21,5 @@ export default function BackofficeLayout({
         <main className="p-6">{children}</main>
       </div>
     </div>
-  )
+  );
 }

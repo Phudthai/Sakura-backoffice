@@ -48,15 +48,15 @@ function normalizeCustomerRow(raw: unknown): Customer | null {
   }
 }
 
-function navigateToPurchasedV2ForCustomer(
+function navigateToPurchasedForCustomer(
   router: ReturnType<typeof useRouter>,
   customer: Customer
 ) {
   const u = customer.username?.trim() || customer.userCode?.trim()
   if (u) {
-    router.push(`/auctions/completed-v2?username=${encodeURIComponent(u)}`)
+    router.push(`/auctions/completed?username=${encodeURIComponent(u)}`)
   } else {
-    router.push('/auctions/completed-v2')
+    router.push('/auctions/completed')
   }
 }
 
@@ -237,11 +237,11 @@ export default function CustomersPage() {
                     key={customer.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => navigateToPurchasedV2ForCustomer(router, customer)}
+                    onClick={() => navigateToPurchasedForCustomer(router, customer)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
-                        navigateToPurchasedV2ForCustomer(router, customer)
+                        navigateToPurchasedForCustomer(router, customer)
                       }
                     }}
                     className="border-b border-card-border last:border-0 hover:bg-sakura-50 transition-colors cursor-pointer"

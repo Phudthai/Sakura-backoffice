@@ -3,6 +3,12 @@
 import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { useNotificationsSummary } from "@/hooks/use-notifications-summary";
+import {
+  countForNavSubHref,
+  formatLotsNotificationTooltip,
+  totalLotNotificationCount,
+} from "@/lib/notifications-summary";
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
@@ -47,8 +53,8 @@ const NAV_CONFIG: readonly NavEntry[] = [
   {
     kind: "link",
     id: "purchased",
-    href: "/auctions/completed-v2",
-    label: "การจัดการสินค้าที่ซื้อแล้ว",
+    href: "/auctions/completed",
+    label: "การจัดการสินค้า",
     icon: Package,
   },
   {
@@ -129,10 +135,7 @@ function isSubItemActive(
   if (!queryPart) return true;
   const expected = new URLSearchParams(queryPart);
   const wantMode = expected.get("purchase_mode");
-  if (
-    pathPart === "/auctions/open-bid-for-user" &&
-    wantMode === "AUCTION"
-  ) {
+  if (pathPart === "/auctions/open-bid-for-user" && wantMode === "AUCTION") {
     return searchParams.get("purchase_mode") !== "BUYOUT";
   }
   for (const [k, v] of expected.entries()) {
@@ -150,10 +153,22 @@ function isAuctionFirstActive(
   return purchaseMode !== "BUYOUT";
 }
 
+function NavBadge({ n, className = "ml-auto" }: { n: number; className?: string }) {
+  if (n <= 0) return null;
+  return (
+    <span
+      className={`shrink-0 rounded-full bg-rose-500 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-white min-w-[1.25rem] tabular-nums ${className}`}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
 export default function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const purchaseModeParam = searchParams.get("purchase_mode");
+  const { summary } = useNotificationsSummary();
 
   const buyoutSectionActive = useMemo(
     () =>
@@ -204,11 +219,20 @@ export default function Sidebar() {
             if (entry.kind === "link") {
               const { id, href, label, icon: Icon } = entry;
               const isActive = isTopLinkActive(href, pathname);
+              const lotsTotal =
+                id === "shipping-lots" && summary != null
+                  ? totalLotNotificationCount(summary)
+                  : 0;
+              const lotsTitle =
+                id === "shipping-lots" && summary != null
+                  ? formatLotsNotificationTooltip(summary)
+                  : undefined;
               return (
                 <li key={id}>
                   <Link
                     href={href}
-                    className={`flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors
+                    title={lotsTitle}
+                    className={`flex min-w-0 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors
                       ${
                         isActive
                           ? "bg-sakura-100 text-sakura-900"
@@ -216,7 +240,10 @@ export default function Sidebar() {
                       }`}
                   >
                     <Icon className="h-4 w-4 shrink-0" />
-                    {label}
+                    <span className="min-w-0 flex-1 truncate">{label}</span>
+                    {id === "shipping-lots" ? (
+                      <NavBadge n={lotsTotal} />
+                    ) : null}
                   </Link>
                 </li>
               );
@@ -242,27 +269,39 @@ export default function Sidebar() {
                   ? auctionSectionActive
                   : slipSectionActive;
 
+            const parentNotiCount =
+              id === "auction" && summary != null
+                ? summary.pendingBids
+                : id === "slips" && summary != null
+                  ? summary.pendingSlips
+                  : 0;
+
             return (
               <li key={id}>
                 <button
                   type="button"
                   onClick={() => setOpen(!isOpen)}
-                  className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors
+                  className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors
                     ${
                       sectionActive
                         ? "bg-sakura-100 text-sakura-900"
                         : "text-sakura-600 hover:bg-sakura-50 hover:text-sakura-900"
                     }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
                     <Icon className="h-4 w-4 shrink-0" />
                     <span className="text-left truncate">{label}</span>
                   </div>
-                  {isOpen ? (
-                    <ChevronDown className="h-4 w-4 shrink-0" />
-                  ) : (
-                    <ChevronRight className="h-4 w-4 shrink-0" />
-                  )}
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {parentNotiCount > 0 ? (
+                      <NavBadge n={parentNotiCount} className="" />
+                    ) : null}
+                    {isOpen ? (
+                      <ChevronDown className="h-4 w-4 shrink-0" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 shrink-0" />
+                    )}
+                  </div>
                 </button>
                 {isOpen && (
                   <ul className="mt-1 ml-4 space-y-0.5 border-l border-sakura-200 pl-3">
@@ -272,18 +311,20 @@ export default function Sidebar() {
                         pathname,
                         searchParams,
                       );
+                      const subCount = countForNavSubHref(sub.href, summary);
                       return (
                         <li key={sub.href}>
                           <Link
                             href={sub.href}
-                            className={`block rounded-lg px-2 py-1.5 text-sm transition-colors
+                            className={`flex min-w-0 items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors
                               ${
                                 isSubActive
                                   ? "font-medium text-sakura-900 bg-sakura-100"
                                   : "text-sakura-600 hover:bg-sakura-50 hover:text-sakura-900"
                               }`}
                           >
-                            {sub.label}
+                            <span className="min-w-0 truncate">{sub.label}</span>
+                            <NavBadge n={subCount} className="" />
                           </Link>
                         </li>
                       );

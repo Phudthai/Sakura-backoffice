@@ -1,11 +1,32 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { API_BACKOFFICE_PREFIX } from '@/lib/api-config'
-import { purchaseModeLabelTh } from '@/lib/purchase-mode-label'
 import Image from 'next/image'
-import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy } from 'lucide-react'
+import { ExternalLink, Search, Loader2, Pencil, Check, X, Copy, Plus } from 'lucide-react'
 import { formatPrice } from '@/lib/utils'
+import BuyoutAddProductModal from '@/components/backoffice/buyout-add-product-modal'
+import { createPortal } from 'react-dom'
+import Swal from 'sweetalert2'
+
+function computeBubblePosition(
+  rect: DOMRect,
+  approxHeight: number,
+  maxWidth = 240
+): { top: number; left: number; width: number } {
+  const width = Math.min(maxWidth, window.innerWidth - 24)
+  const margin = 12
+  let left = rect.left
+  if (left + width > window.innerWidth - margin) left = Math.max(margin, window.innerWidth - width - margin)
+  if (left < margin) left = margin
+  let top = rect.bottom + 8
+  if (top + approxHeight > window.innerHeight - margin) {
+    top = Math.max(margin, rect.top - approxHeight - 8)
+  }
+  if (top < margin) top = margin
+  return { top, left, width }
+}
 
 interface AuctionRequest {
   id: number
@@ -26,6 +47,84 @@ interface AuctionRequest {
   isPaid?: boolean
   domestic_shipping_baht?: number | null
   purchaseMode?: string
+  site_name?: string
+  siteName?: string
+  webName?: string
+  web_name?: string
+  intl_shipping_type?: string | null
+  intlShippingType?: string | null
+  /** ราคาเป็นบาท — จาก API */
+  currentPriceBaht?: number | null
+  current_price_baht?: number | null
+  /** จาก PATCH note / intl-shipping-type ฯลฯ */
+  deliveryStages?: unknown
+}
+
+function siteNameFromCompletedItem(item: AuctionRequest): string {
+  const raw = item.webName ?? item.web_name ?? item.siteName ?? item.site_name
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  if (item.url) {
+    try {
+      return new URL(item.url).hostname.replace(/^www\./, '')
+    } catch {
+      return '—'
+    }
+  }
+  return '—'
+}
+
+function priceBahtFromItem(item: AuctionRequest): number | null {
+  const c = item.currentPriceBaht ?? item.current_price_baht
+  if (typeof c === 'number' && Number.isFinite(c)) return c
+  return null
+}
+
+function intlShippingTypeRaw(item: AuctionRequest): string | null {
+  const r = item as unknown as Record<string, unknown>
+  const v =
+    item.intl_shipping_type ??
+    item.intlShippingType ??
+    (typeof r.intlShippingType === 'string' ? r.intlShippingType : null) ??
+    (typeof r.intl_shipping_type === 'string' ? r.intl_shipping_type : null)
+  if (v == null || String(v).trim() === '') return null
+  return String(v).trim().toLowerCase()
+}
+
+function intlShippingTypeValue(item: AuctionRequest): '' | 'air' | 'sea' {
+  const u = intlShippingTypeRaw(item)
+  if (u === 'air') return 'air'
+  if (u === 'sea') return 'sea'
+  return ''
+}
+
+function intlShippingLabelTh(item: AuctionRequest): string {
+  const u = intlShippingTypeRaw(item)
+  if (u == null) return '—'
+  if (u === 'air') return 'ทางอากาศ'
+  if (u === 'sea') return 'ทางเรือ'
+  return String(u)
+}
+
+function intlShippingSuffixForLot(
+  lot: { intlShippingType?: string | null; intl_shipping_type?: string | null } | null | undefined
+): 'air' | 'sea' | '' {
+  if (!lot) return ''
+  const raw = lot.intlShippingType ?? lot.intl_shipping_type
+  if (raw == null || String(raw).trim() === '') return ''
+  const u = String(raw).trim().toLowerCase()
+  if (u === 'air' || u === 'sea') return u
+  return ''
+}
+
+/** แสดง LOT1 (air) / LOT1 (sea) ให้แยกเมื่อ lotCode ซ้ำกันคนละช่องทาง */
+function formatDomesticQueueLotDisplay(lot: {
+  lotCode: string
+  intlShippingType?: string | null
+  intl_shipping_type?: string | null
+}): string {
+  const code = lot.lotCode ?? '-'
+  const s = intlShippingSuffixForLot(lot)
+  return s ? `${code} (${s})` : code
 }
 
 interface DomesticShippingQueueItem {
@@ -33,8 +132,15 @@ interface DomesticShippingQueueItem {
   userCode: string
   username: string
   pendingDomesticItemCount: number
-  lots: { id: number; lotCode: string }[]
-  domesticPendingBaht: number
+  lots: {
+    id: number
+    lotCode: string
+    intlShippingType?: string | null
+    intl_shipping_type?: string | null
+    isArrived?: boolean
+    arriveAt?: string | null
+  }[]
+  domesticPendingBaht: number | null
 }
 
 interface DomesticQueueItemDetail {
@@ -46,7 +152,14 @@ interface DomesticQueueItemDetail {
   weightGram?: number | null
   currentPriceBaht?: number
   boughtAt?: string | null
-  lot?: { id: number; lotCode: string; isArrived?: boolean; arriveAt?: string | null } | null
+  lot?: {
+    id: number
+    lotCode: string
+    isArrived?: boolean
+    arriveAt?: string | null
+    intlShippingType?: string | null
+    intl_shipping_type?: string | null
+  } | null
   deliveryStages?: Array<{
     stageTypeCode?: string
     stageTypeNameTh?: string
@@ -71,13 +184,48 @@ interface ShippingLotOption {
   lot_code: string
 }
 
-type ActiveTab = 'not_arrived' | 'air' | 'sea' | 'arrived_th'
+/** จาก GET /api/backoffice/users?role=customer — ใช้ค้นหา + dropdown */
+interface CustomerPick {
+  id: number
+  userCode: string | null
+  username: string | null
+  name: string
+  email: string
+}
+
+function normalizeCustomerPick(raw: unknown): CustomerPick | null {
+  if (raw == null || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  const idRaw = r.id
+  const id = typeof idRaw === 'number' ? idRaw : Number(idRaw)
+  if (!Number.isFinite(id)) return null
+  const name =
+    (typeof r.name === 'string' && r.name) ||
+    (typeof r.fullName === 'string' && r.fullName) ||
+    (typeof r.displayName === 'string' && r.displayName) ||
+    '-'
+  return {
+    id,
+    userCode: typeof r.userCode === 'string' ? r.userCode : (r.user_code as string | null) ?? null,
+    username: typeof r.username === 'string' ? r.username : (r.user_name as string | null) ?? null,
+    email: typeof r.email === 'string' ? r.email : '',
+    name,
+  }
+}
+
+function customerPickMatchesQuery(c: CustomerPick, q: string): boolean {
+  const tokens = q.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return false
+  const fields = [c.userCode, c.username, c.name, c.email].map((s) => (s ?? '').toLowerCase())
+  return tokens.every((token) => fields.some((f) => f.includes(token)))
+}
+
+type ActiveTab = 'not_arrived' | 'shipping' | 'arrived_th'
 type ShippingTab = 'air' | 'sea'
 
 const TABS: { id: ActiveTab; label: string }[] = [
   { id: 'not_arrived', label: 'สินค้าที่ยังไม่ถึงบ้านญี่ปุ่น' },
-  { id: 'air', label: 'จัดส่ง air' },
-  { id: 'sea', label: 'จัดส่ง sea' },
+  { id: 'shipping', label: 'จัดส่ง' },
   { id: 'arrived_th', label: 'สินค้าที่ถึงไทยแล้ว' },
 ]
 
@@ -92,7 +240,8 @@ type AuctionListFilters = {
 /** Builds GET /api/backoffice/purchase-requests query (combines with tab: status, delivery_stage, shipping_type). */
 function buildAuctionQuery(
   tab: Exclude<ActiveTab, 'arrived_th'>,
-  filters: AuctionListFilters
+  filters: AuctionListFilters,
+  shippingType: ShippingTab
 ): string {
   const params = new URLSearchParams()
   params.set('page', '1')
@@ -102,15 +251,11 @@ function buildAuctionQuery(
     params.set('purchase_mode', filters.purchaseMode)
   }
   if (tab === 'not_arrived') params.set('delivery_stage', '0')
-  if (tab === 'air') {
+  if (tab === 'shipping') {
     params.set('delivery_stage', '1')
-    params.set('shipping_type', 'air')
+    params.set('shipping_type', shippingType)
   }
-  if (tab === 'sea') {
-    params.set('delivery_stage', '1')
-    params.set('shipping_type', 'sea')
-  }
-  if (tab === 'air' || tab === 'sea') {
+  if (tab === 'shipping') {
     if (filters.lotId != null && !Number.isNaN(filters.lotId)) {
       params.set('lot_id', String(filters.lotId))
     }
@@ -127,21 +272,67 @@ function buildAuctionQuery(
   return params.toString()
 }
 
-export default function CompletedAuctionsPage() {
+/** ถ้า filter ตรงกับรหัสผู้ใช้ (externalId / userCode) ให้ใช้ชื่อผู้ใช้สำหรับ modal กดเว็ป */
+function resolveBuyoutModalUsername(
+  filterRaw: string,
+  auctionItems: AuctionRequest[],
+  domesticItems: DomesticShippingQueueItem[]
+): string {
+  const t = filterRaw.trim()
+  if (!t) return ''
+  const lower = t.toLowerCase()
+  const matchAr = auctionItems.find(
+    (it) => (it.externalId ?? '').toLowerCase() === lower
+  )
+  if (matchAr?.username?.trim()) return matchAr.username.trim()
+
+  const matchDom = domesticItems.find(
+    (it) => (it.userCode ?? '').toLowerCase() === lower
+  )
+  if (matchDom?.username?.trim()) return matchDom.username.trim()
+
+  return t
+}
+
+function CompletedAuctionsPageContent() {
+  const searchParams = useSearchParams()
+  const usernameFromUrl = searchParams.get('username')
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('not_arrived')
+  const [shippingType, setShippingType] = useState<ShippingTab>('air')
   const [items, setItems] = useState<AuctionRequest[]>([])
   const [domesticQueueItems, setDomesticQueueItems] = useState<DomesticShippingQueueItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [filterUser, setFilterUser] = useState('')
+  const [customers, setCustomers] = useState<CustomerPick[]>([])
+  const [loadingCustomers, setLoadingCustomers] = useState(false)
+  const [customerDdOpen, setCustomerDdOpen] = useState(false)
+  const customerSearchBlurRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null)
   const [editingNoteValue, setEditingNoteValue] = useState('')
+  const [notePopoverPos, setNotePopoverPos] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
   const [noteSaving, setNoteSaving] = useState(false)
   const [editingWeightId, setEditingWeightId] = useState<number | null>(null)
   const [editingWeightValue, setEditingWeightValue] = useState('')
+  const [weightPopoverPos, setWeightPopoverPos] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
   const [weightSaving, setWeightSaving] = useState(false)
+  const [intlShippingSavingId, setIntlShippingSavingId] = useState<number | null>(null)
   const [editingDomesticUserId, setEditingDomesticUserId] = useState<number | null>(null)
   const [editingDomesticValue, setEditingDomesticValue] = useState('')
+  const [domesticPopoverPos, setDomesticPopoverPos] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
   const [domesticSaving, setDomesticSaving] = useState(false)
   const [userItemsModalOpen, setUserItemsModalOpen] = useState(false)
   const [selectedUserForItems, setSelectedUserForItems] = useState<DomesticShippingQueueItem | null>(null)
@@ -169,9 +360,64 @@ export default function CompletedAuctionsPage() {
   const [purchaseModeFilter, setPurchaseModeFilter] = useState<
     '' | 'AUCTION' | 'BUYOUT'
   >('')
+  const [addProductModalOpen, setAddProductModalOpen] = useState(false)
+  /** snapshot ตอนกดเปิด modal — ให้ตรงกับ filter ชื่อลูกค้าตอนนั้น */
+  const [addProductModalInitialUsername, setAddProductModalInitialUsername] =
+    useState('')
+
+  useEffect(() => {
+    if (usernameFromUrl != null && usernameFromUrl !== '') {
+      try {
+        setFilterUser(decodeURIComponent(usernameFromUrl))
+      } catch {
+        setFilterUser(usernameFromUrl)
+      }
+    }
+  }, [usernameFromUrl])
+
+  const fetchCustomers = useCallback(async () => {
+    setLoadingCustomers(true)
+    try {
+      const qs = new URLSearchParams({ role: 'customer' })
+      const res = await fetch(`${API_BACKOFFICE_PREFIX}/users?${qs}`, {
+        credentials: 'include',
+      })
+      const json = await res.json()
+      if (json.success && Array.isArray(json.data)) {
+        const rows = json.data
+          .map(normalizeCustomerPick)
+          .filter((c: CustomerPick | null): c is CustomerPick => c != null)
+        setCustomers(rows)
+      } else {
+        setCustomers([])
+      }
+    } catch {
+      setCustomers([])
+    } finally {
+      setLoadingCustomers(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchCustomers()
+  }, [fetchCustomers])
+
+  useEffect(() => {
+    return () => {
+      if (customerSearchBlurRef.current != null) {
+        clearTimeout(customerSearchBlurRef.current)
+      }
+    }
+  }, [])
+
+  const customerSuggestions = useMemo(() => {
+    const q = filterUser.trim()
+    if (!q) return []
+    return customers.filter((c) => customerPickMatchesQuery(c, q)).slice(0, 40)
+  }, [customers, filterUser])
 
   const isNotArrivedTab = activeTab === 'not_arrived'
-  const isShippingTab = activeTab === 'air' || activeTab === 'sea'
+  const isShippingTab = activeTab === 'shipping'
   const isArrivedThTab = activeTab === 'arrived_th'
 
   useEffect(() => {
@@ -191,8 +437,8 @@ export default function CompletedAuctionsPage() {
   }, [lotIdByTab.sea])
 
   useEffect(() => {
-    if (activeTab !== 'air' && activeTab !== 'sea') return
-    const shipTab = activeTab
+    if (activeTab !== 'shipping') return
+    const shipTab = shippingType
     let cancelled = false
     setLoadingShippingLots(true)
     void (async () => {
@@ -228,12 +474,12 @@ export default function CompletedAuctionsPage() {
     return () => {
       cancelled = true
     }
-  }, [activeTab])
+  }, [activeTab, shippingType])
 
   /** ถ้าเลือก lot ที่ไม่มีในรายการหลังโหลด — เคลียร์ */
   useEffect(() => {
-    if (activeTab !== 'air' && activeTab !== 'sea') return
-    const tab = activeTab
+    if (activeTab !== 'shipping') return
+    const tab = shippingType
     const list = shippingLotsByTab[tab]
     if (list.length === 0) return
     setLotIdByTab((prev) => {
@@ -244,7 +490,7 @@ export default function CompletedAuctionsPage() {
       if (list.some((l) => l.id === id)) return prev
       return { ...prev, [tab]: '' }
     })
-  }, [activeTab, shippingLotsByTab])
+  }, [activeTab, shippingType, shippingLotsByTab])
 
   const fetchData = useCallback(async () => {
     setIsLoading(true)
@@ -259,12 +505,7 @@ export default function CompletedAuctionsPage() {
         if (json.success) setDomesticQueueItems(json.data ?? [])
         else setError(json.error?.message ?? 'Failed to load domestic shipping queue')
       } else {
-        const lotStr =
-          activeTab === 'air'
-            ? debouncedLotByTab.air
-            : activeTab === 'sea'
-              ? debouncedLotByTab.sea
-              : ''
+        const lotStr = activeTab === 'shipping' ? debouncedLotByTab[shippingType] : ''
         const lotNum = lotStr.trim()
           ? parseInt(lotStr.replace(/\D/g, ''), 10)
           : NaN
@@ -276,7 +517,7 @@ export default function CompletedAuctionsPage() {
             purchaseModeFilter === 'AUCTION' || purchaseModeFilter === 'BUYOUT'
               ? purchaseModeFilter
               : undefined,
-        })
+        }, shippingType)
         const arRes = await fetch(
           `${API_BACKOFFICE_PREFIX}/purchase-requests?${query}`,
           { credentials: 'include' }
@@ -300,6 +541,7 @@ export default function CompletedAuctionsPage() {
     }
   }, [
     activeTab,
+    shippingType,
     debouncedLotByTab.air,
     debouncedLotByTab.sea,
     intlOutstanding,
@@ -337,15 +579,59 @@ export default function CompletedAuctionsPage() {
     : 0
   const summaryOutstanding = summaryTotal - summaryPaid
 
-  const startEditNote = (itemId: number, currentNote: string | null) => {
+  const startEditNote = (itemId: number, currentNote: string | null, anchorRect: DOMRect) => {
+    setEditingDomesticUserId(null)
+    setEditingDomesticValue('')
+    setDomesticPopoverPos(null)
+    setEditingWeightId(null)
+    setEditingWeightValue('')
+    setWeightPopoverPos(null)
     setEditingNoteId(itemId)
     setEditingNoteValue(currentNote ?? '')
+    setNotePopoverPos(computeBubblePosition(anchorRect, 168))
   }
 
   const cancelEditNote = () => {
     setEditingNoteId(null)
     setEditingNoteValue('')
+    setNotePopoverPos(null)
   }
+
+  const startEditWeight = (itemId: number, currentWeight: number | null, anchorRect: DOMRect) => {
+    setEditingDomesticUserId(null)
+    setEditingDomesticValue('')
+    setDomesticPopoverPos(null)
+    setEditingNoteId(null)
+    setEditingNoteValue('')
+    setNotePopoverPos(null)
+    setEditingWeightId(itemId)
+    setEditingWeightValue(currentWeight != null ? String(currentWeight) : '')
+    setWeightPopoverPos(computeBubblePosition(anchorRect, 200, 220))
+  }
+
+  const cancelEditWeight = () => {
+    setEditingWeightId(null)
+    setEditingWeightValue('')
+    setWeightPopoverPos(null)
+  }
+
+  useEffect(() => {
+    if (editingNoteId == null && editingWeightId == null && editingDomesticUserId == null) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setEditingNoteId(null)
+      setEditingNoteValue('')
+      setNotePopoverPos(null)
+      setEditingWeightId(null)
+      setEditingWeightValue('')
+      setWeightPopoverPos(null)
+      setEditingDomesticUserId(null)
+      setEditingDomesticValue('')
+      setDomesticPopoverPos(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [editingNoteId, editingWeightId, editingDomesticUserId])
 
   const saveNote = async () => {
     if (editingNoteId == null) return
@@ -377,24 +663,22 @@ export default function CompletedAuctionsPage() {
     }
   }
 
-  const startEditWeight = (itemId: number, currentWeight: number | null) => {
-    setEditingWeightId(itemId)
-    setEditingWeightValue(currentWeight != null ? String(currentWeight) : '')
-  }
-
-  const cancelEditWeight = () => {
+  const startEditDomestic = (userId: number, currentAmount: number | null, anchorRect: DOMRect) => {
+    setEditingNoteId(null)
+    setEditingNoteValue('')
+    setNotePopoverPos(null)
     setEditingWeightId(null)
     setEditingWeightValue('')
-  }
-
-  const startEditDomestic = (userId: number, currentAmount: number) => {
+    setWeightPopoverPos(null)
     setEditingDomesticUserId(userId)
-    setEditingDomesticValue(String(currentAmount))
+    setEditingDomesticValue(currentAmount != null ? String(currentAmount) : '')
+    setDomesticPopoverPos(computeBubblePosition(anchorRect, 200, 240))
   }
 
   const cancelEditDomestic = () => {
     setEditingDomesticUserId(null)
     setEditingDomesticValue('')
+    setDomesticPopoverPos(null)
   }
 
   const openUserItemsModal = async (item: DomesticShippingQueueItem) => {
@@ -486,11 +770,16 @@ export default function CompletedAuctionsPage() {
       )
       const json = await res.json()
       if (json.success) {
-        setItems((prev) =>
-          prev.map((item) =>
-            item.id === editingWeightId ? { ...item, weight_gram: gram } : item
+        // แท็บยังไม่ถึงญี่ปุ่น: พอใส่กรัมแล้วรายการจะไปแท็บจัดส่งหลังรีเฟรช — เอาออกจากรายการทันที
+        if (isNotArrivedTab && gram != null) {
+          setItems((prev) => prev.filter((item) => item.id !== editingWeightId))
+        } else {
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === editingWeightId ? { ...item, weight_gram: gram } : item
+            )
           )
-        )
+        }
         cancelEditWeight()
       } else {
         setError(json.error?.message ?? 'Failed to save weight')
@@ -502,12 +791,51 @@ export default function CompletedAuctionsPage() {
     }
   }
 
+  const patchIntlShippingType = async (itemId: number, intl_shipping_type: 'air' | 'sea') => {
+    setIntlShippingSavingId(itemId)
+    setError('')
+    try {
+      const res = await fetch(
+        `${API_BACKOFFICE_PREFIX}/purchase-requests/${itemId}/intl-shipping-type`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ intl_shipping_type }),
+        }
+      )
+      const json = await res.json()
+      if (!res.ok) {
+        if (res.status === 409) {
+          setError(
+            json.error?.message ??
+              'ใส่กรัมแล้ว ไม่สามารถเปลี่ยนวิธีส่งได้ (WEIGHT_GRAM_ALREADY_SET)'
+          )
+        } else {
+          setError(json.error?.message ?? 'ไม่สามารถอัปเดตวิธีส่งได้')
+        }
+        return
+      }
+      if (json.success && json.data != null && typeof json.data === 'object') {
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === itemId ? { ...it, ...(json.data as Partial<AuctionRequest>) } : it
+          )
+        )
+      }
+    } catch {
+      setError('Network error')
+    } finally {
+      setIntlShippingSavingId(null)
+    }
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-sakura-900 tracking-tight">
-            การประมูลที่สิ้นสุดแล้ว
+            การจัดการสินค้า
           </h1>
         </div>
         <span className="rounded-full bg-indigo-50 px-4 py-1.5 text-sm font-semibold text-indigo-700">
@@ -533,7 +861,11 @@ export default function CompletedAuctionsPage() {
       </div>
 
       {!isArrivedThTab && (
-        <div className="mb-4 flex flex-wrap items-end gap-4">
+        <div
+          className={`mb-4 flex flex-wrap items-end gap-4 ${
+            !isShippingTab ? 'justify-between' : ''
+          }`}
+        >
           <div>
             <label className="block text-xs font-medium text-sakura-600 mb-1">
               โหมดการซื้อ
@@ -551,35 +883,71 @@ export default function CompletedAuctionsPage() {
               <option value="BUYOUT">กดเว็ป</option>
             </select>
           </div>
+          {!isShippingTab && (
+            <button
+              type="button"
+              onClick={() => {
+                setAddProductModalInitialUsername(
+                  resolveBuyoutModalUsername(
+                    filterUser,
+                    items,
+                    domesticQueueItems
+                  )
+                )
+                setAddProductModalOpen(true)
+              }}
+              className="btn-gradient inline-flex items-center justify-center gap-2 px-5 py-2.5 shrink-0 self-end"
+            >
+              <Plus className="h-4 w-4" />
+              เพิ่มสินค้า
+            </button>
+          )}
         </div>
       )}
 
       {isShippingTab && (
-        <div className="mb-4 flex flex-wrap items-end gap-4 rounded-xl border border-sakura-200/80 bg-white p-4 shadow-sm">
-          <div>
-            <label className="block text-xs font-medium text-sakura-600 mb-1">
-              Lot {activeTab === 'air' ? '(Air)' : '(Sea)'}
-            </label>
-            <select
-              value={lotIdByTab[activeTab as ShippingTab]}
-              onChange={(e) =>
-                setLotIdByTab((prev) => ({
-                  ...prev,
-                  [activeTab as ShippingTab]: e.target.value,
-                }))
-              }
-              disabled={loadingShippingLots}
-              className="min-w-[10rem] max-w-xs rounded-lg border border-card-border px-3 py-2 text-sm text-sakura-900
-                         focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60"
-            >
-              <option value="">ทั้งหมด</option>
-              {shippingLotsByTab[activeTab as ShippingTab].map((lot) => (
-                <option key={lot.id} value={String(lot.id)}>
-                  {lot.lot_code}
-                </option>
-              ))}
-            </select>
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-sakura-200/80 bg-white px-4 py-3 shadow-sm">
+          {/* Air / Sea pill toggle */}
+          <div className="flex items-center gap-0.5 rounded-lg bg-sakura-100/80 p-0.5">
+            {(['air', 'sea'] as const).map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => setShippingType(type)}
+                className={`flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-semibold transition-all ${
+                  shippingType === type
+                    ? 'bg-white text-indigo-700 shadow-sm ring-1 ring-sakura-200/60'
+                    : 'text-sakura-500 hover:text-sakura-800'
+                }`}
+              >
+                {type === 'air' ? '✈ Air' : '🚢 Sea'}
+              </button>
+            ))}
           </div>
+
+          <div className="h-6 w-px bg-sakura-200" />
+
+          {/* Lot */}
+          <select
+            value={lotIdByTab[shippingType]}
+            onChange={(e) =>
+              setLotIdByTab((prev) => ({ ...prev, [shippingType]: e.target.value }))
+            }
+            disabled={loadingShippingLots}
+            className="rounded-lg border border-card-border px-3 py-1.5 text-sm text-sakura-900 min-w-[9rem]
+                       focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:opacity-60"
+          >
+            <option value="">Lot ทั้งหมด</option>
+            {shippingLotsByTab[shippingType].map((lot) => (
+              <option key={lot.id} value={String(lot.id)}>
+                {lot.lot_code}
+              </option>
+            ))}
+          </select>
+
+          <div className="h-6 w-px bg-sakura-200" />
+
+          {/* Checkboxes */}
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -587,7 +955,7 @@ export default function CompletedAuctionsPage() {
               onChange={(e) => setIntlOutstanding(e.target.checked)}
               className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
             />
-            <span className="text-sm text-sakura-800">ค้าง intl (สินค้าเต็ม + ขนส่งต่างประเทศ)</span>
+            <span className="text-sm text-sakura-800">ค้าง intl</span>
           </label>
           <label className="inline-flex items-center gap-2 cursor-pointer select-none">
             <input
@@ -596,11 +964,22 @@ export default function CompletedAuctionsPage() {
               onChange={(e) => setOverduePayment(e.target.checked)}
               className="h-4 w-4 rounded border-sakura-300 text-indigo-600"
             />
-            <span className="text-sm text-sakura-800">เลยกำหนดชำระ (Bangkok) และยังค้าง intl</span>
+            <span className="text-sm text-sakura-800">เลยกำหนดชำระ</span>
           </label>
-          <p className="text-xs text-muted max-w-xs">
-            เมื่อเปิดฟิลเตอร์ค้างจ่าย จะขอรายชื่อลูกค้าใน meta อัตโนมัติ (ครบทั้งชุดที่ผ่านฟิลเตอร์)
-          </p>
+
+          {/* Info tooltip */}
+          <span
+            title={
+              'ค้าง intl = สินค้าเต็ม + ขนส่งต่างประเทศยังค้างอยู่\n' +
+              'เลยกำหนดชำระ = Bangkok pickup เลยกำหนด และยังค้าง intl\n' +
+              'เมื่อเปิดฟิลเตอร์ค้างจ่าย จะขอรายชื่อลูกค้าใน meta อัตโนมัติ'
+            }
+            className="ml-auto cursor-help text-sakura-400 hover:text-sakura-600 transition-colors"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
+          </span>
         </div>
       )}
 
@@ -624,16 +1003,73 @@ export default function CompletedAuctionsPage() {
       )}
 
       <div className="mb-5 flex items-center justify-between gap-4 flex-wrap">
-        <div className="relative w-72">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
+        <div className="relative w-full max-w-md min-w-[18rem]">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none z-[1]" />
+          {loadingCustomers && (
+            <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted pointer-events-none z-[1]" />
+          )}
           <input
             type="text"
+            autoComplete="off"
             value={filterUser}
-            onChange={(e) => setFilterUser(e.target.value)}
-            placeholder={isArrivedThTab ? 'ค้นหาตาม User Name หรือ User ID...' : 'ค้นหาตามชื่อสินค้า, User Name หรือ User ID...'}
-            className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-card-border bg-white text-sm
+            onChange={(e) => {
+              setFilterUser(e.target.value)
+              setCustomerDdOpen(true)
+            }}
+            onFocus={() => setCustomerDdOpen(true)}
+            onBlur={() => {
+              if (customerSearchBlurRef.current != null) {
+                clearTimeout(customerSearchBlurRef.current)
+              }
+              customerSearchBlurRef.current = setTimeout(() => setCustomerDdOpen(false), 200)
+            }}
+            placeholder={
+              isArrivedThTab
+                ? 'พิมพ์เพื่อเลือกลูกค้าหรือค้นหา User…'
+                : 'พิมพ์เพื่อเลือกลูกค้า หรือค้นหาสินค้า / User…'
+            }
+            className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-card-border bg-white text-sm
                        placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 transition-shadow"
+            aria-expanded={Boolean(
+              customerDdOpen && filterUser.trim().length > 0 && customerSuggestions.length > 0
+            )}
+            aria-controls="completed-customer-suggest"
+            aria-autocomplete="list"
           />
+          {customerDdOpen &&
+            filterUser.trim().length > 0 &&
+            customerSuggestions.length > 0 && (
+              <ul
+                id="completed-customer-suggest"
+                role="listbox"
+                className="absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-y-auto rounded-xl border border-card-border bg-white py-1 shadow-lg"
+              >
+                {customerSuggestions.map((c) => {
+                  const line1 = c.name
+                  const line2 = [c.userCode, c.username, c.email].filter(Boolean).join(' · ')
+                  return (
+                    <li key={c.id} role="option">
+                      <button
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-sakura-50 transition-colors"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          const v =
+                            c.username?.trim() || c.userCode?.trim() || c.name.trim() || ''
+                          setFilterUser(v)
+                          setCustomerDdOpen(false)
+                        }}
+                      >
+                        <span className="font-medium text-sakura-900 block truncate">{line1}</span>
+                        {line2 ? (
+                          <span className="text-xs text-muted-dark block truncate font-mono">{line2}</span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
         </div>
         <div className="flex flex-wrap gap-4 min-h-[72px]">
           {!isNotArrivedTab && !isArrivedThTab ? (
@@ -708,17 +1144,20 @@ export default function CompletedAuctionsPage() {
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-48">
                         สินค้า
                       </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
-                        ลิงก์ประมูล
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-36 whitespace-nowrap">
+                        ลิงก์
                       </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-28 whitespace-nowrap">
-                        โหมด
-                      </th>
-                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        ราคาปัจจุบัน
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center min-w-[7rem] max-w-[10rem]">
+                        ชื่อเว็ป
                       </th>
                       <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
-                        ราคาที่ขอ
+                        ราคา(เยน)
+                      </th>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 text-center align-middle w-40 whitespace-nowrap">
+                        ราคา(บาท)
+                      </th>
+                      <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-32 whitespace-nowrap">
+                        วิธีส่ง
                       </th>
                       {isShippingTab && (
                         <th className="px-6 py-4 text-xs font-semibold uppercase tracking-wider text-sakura-600 align-middle text-center w-40 whitespace-nowrap">
@@ -763,7 +1202,7 @@ export default function CompletedAuctionsPage() {
                       <td className="px-6 py-5 align-middle text-center w-40">
                         <span className="font-medium text-sakura-800">
                           {item.lots?.length
-                            ? item.lots.map((l) => l.lotCode).join(', ')
+                            ? item.lots.map((l) => formatDomesticQueueLotDisplay(l)).join(', ')
                             : '-'}
                         </span>
                       </td>
@@ -771,56 +1210,22 @@ export default function CompletedAuctionsPage() {
                         className="px-6 py-5 align-middle text-center w-44 bg-teal-50/40"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {editingDomesticUserId === item.userId ? (
-                          <div className="flex flex-col gap-1.5 min-w-[110px]">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={editingDomesticValue}
-                              onChange={(e) =>
-                                setEditingDomesticValue(e.target.value.replace(/\D/g, ''))
-                              }
-                              placeholder="บาท"
-                              className="rounded-lg border border-sakura-200 px-2.5 py-1.5 text-xs w-24
-                                         focus:outline-none focus:ring-2 focus:ring-teal-200 focus:border-teal-300"
-                              autoFocus
-                            />
-                            <div className="flex gap-1.5">
-                              <button
-                                onClick={handleSaveDomesticShipping}
-                                disabled={domesticSaving}
-                                className="flex-1 inline-flex items-center justify-center gap-1 rounded bg-teal-600 px-2 py-1 text-xs font-medium text-white
-                                           hover:bg-teal-700 disabled:opacity-50"
-                              >
-                                {domesticSaving ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Check className="h-3 w-3" />
-                                )}
-                                Save
-                              </button>
-                              <button
-                                onClick={cancelEditDomestic}
-                                className="rounded border border-sakura-200 px-2 py-1 text-xs font-medium text-sakura-600 hover:bg-sakura-50"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              startEditDomestic(item.userId, item.domesticPendingBaht)
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-teal-700 hover:bg-teal-50 hover:text-teal-900 transition-colors"
-                          >
-                            <Pencil className="h-3 w-3 shrink-0 opacity-60" />
-                            <span className="tabular-nums font-semibold">
-                              ฿{formatPrice(item.domesticPendingBaht)}
-                            </span>
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={(e) =>
+                            startEditDomestic(
+                              item.userId,
+                              item.domesticPendingBaht,
+                              e.currentTarget.getBoundingClientRect()
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-teal-700 hover:bg-teal-50 hover:text-teal-900 transition-colors"
+                        >
+                          <Pencil className="h-3 w-3 shrink-0 opacity-60" />
+                          <span className="tabular-nums font-semibold">
+                            ฿{formatPrice(item.domesticPendingBaht)}
+                          </span>
+                        </button>
                       </td>
                     </tr>
                   ))
@@ -865,7 +1270,7 @@ export default function CompletedAuctionsPage() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-40">
+                    <td className="px-6 py-5 align-middle text-center w-36">
                       {item.url ? (
                         <a
                           href={item.url}
@@ -881,9 +1286,12 @@ export default function CompletedAuctionsPage() {
                         <span className="text-muted">-</span>
                       )}
                     </td>
-                    <td className="px-6 py-5 align-middle text-center w-28">
-                      <span className="inline-flex items-center rounded-lg bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800 whitespace-nowrap">
-                        {purchaseModeLabelTh(item.purchaseMode)}
+                    <td className="px-6 py-5 align-middle text-center max-w-[10rem]">
+                      <span
+                        className="text-sm text-sakura-800 line-clamp-2 break-words"
+                        title={siteNameFromCompletedItem(item)}
+                      >
+                        {siteNameFromCompletedItem(item)}
                       </span>
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-40">
@@ -895,10 +1303,63 @@ export default function CompletedAuctionsPage() {
                     </td>
                     <td className="px-6 py-5 align-middle text-center w-40">
                       <div className="flex min-h-[56px] w-full items-center justify-center">
-                        <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
-                          ¥{formatPrice(item.lastBid?.price ?? 0)}
-                        </span>
+                        {(() => {
+                          const baht = priceBahtFromItem(item)
+                          return baht != null ? (
+                            <span className="font-bold tabular-nums text-indigo-700 whitespace-nowrap">
+                              ฿{formatPrice(baht)}
+                            </span>
+                          ) : (
+                            <span className="text-muted">—</span>
+                          )
+                        })()}
                       </div>
+                    </td>
+                    <td className="px-6 py-5 align-middle text-center w-32">
+                      {isNotArrivedTab && item.weight_gram == null ? (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <select
+                            aria-label="วิธีส่ง"
+                            value={intlShippingTypeValue(item)}
+                            onChange={async (e) => {
+                              const v = e.target.value
+                              if (v !== 'air' && v !== 'sea') return
+                              const prev = intlShippingTypeValue(item)
+                              if (v === prev) return
+                              const label = v === 'air' ? 'ทางอากาศ' : 'ทางเรือ'
+                              const { isConfirmed } = await Swal.fire({
+                                title: prev === '' ? 'ตั้งวิธีส่ง' : 'เปลี่ยนวิธีส่ง',
+                                text:
+                                  prev === ''
+                                    ? `ต้องการตั้งวิธีส่งเป็น "${label}" หรือไม่?`
+                                    : `ต้องการเปลี่ยนวิธีส่งเป็น "${label}" หรือไม่`,
+                                icon: 'question',
+                                showCancelButton: true,
+                                confirmButtonText: 'ยืนยัน',
+                                cancelButtonText: 'ยกเลิก',
+                              })
+                              if (!isConfirmed) return
+                              void patchIntlShippingType(item.id, v)
+                            }}
+                            disabled={intlShippingSavingId === item.id}
+                            className="max-w-[9rem] rounded-lg border border-sakura-200 bg-white px-2 py-1.5 text-xs text-sakura-800
+                                       focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300 disabled:opacity-60"
+                          >
+                            <option value="" disabled hidden>
+                              {'\u200b'}
+                            </option>
+                            <option value="air">ทางอากาศ</option>
+                            <option value="sea">ทางเรือ</option>
+                          </select>
+                          {intlShippingSavingId === item.id ? (
+                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-600" aria-hidden />
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-sm text-sakura-800 whitespace-nowrap">
+                          {intlShippingLabelTh(item)}
+                        </span>
+                      )}
                     </td>
                     {isShippingTab && (
                       <td className="px-6 py-5 align-middle text-center w-40">
@@ -908,109 +1369,39 @@ export default function CompletedAuctionsPage() {
                       </td>
                     )}
                     <td className="px-6 py-5 align-middle text-center w-40">
-                      {editingNoteId === item.id ? (
-                        <div className="flex flex-col gap-1.5 min-w-[140px]">
-                          <textarea
-                            value={editingNoteValue}
-                            onChange={(e) =>
-                              setEditingNoteValue(e.target.value.slice(0, 2000))
-                            }
-                            placeholder="Add note..."
-                            rows={2}
-                            maxLength={2000}
-                            className="rounded-lg border border-sakura-200 px-2.5 py-1.5 text-xs resize-none
-                                       focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-                            autoFocus
-                          />
-                          <div className="flex gap-1.5">
-                            <button
-                              onClick={saveNote}
-                              disabled={noteSaving}
-                              className="flex-1 inline-flex items-center justify-center gap-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white
-                                         hover:bg-indigo-700 disabled:opacity-50"
-                            >
-                              {noteSaving ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <Check className="h-3 w-3" />
-                              )}
-                              Save
-                            </button>
-                            <button
-                              onClick={cancelEditNote}
-                              className="rounded border border-sakura-200 px-2 py-1 text-xs font-medium text-sakura-600 hover:bg-sakura-50"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => startEditNote(item.id, item.note ?? null)}
-                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors text-left min-h-[32px]"
-                        >
-                          <Pencil className="h-3 w-3 shrink-0 opacity-60" />
-                          <span className="line-clamp-2 max-w-[100px]">
-                            {item.note?.trim() || 'Add note'}
-                          </span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={(e) =>
+                          startEditNote(item.id, item.note ?? null, e.currentTarget.getBoundingClientRect())
+                        }
+                        className="inline-flex max-w-full items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors text-left min-h-[32px] min-w-0"
+                      >
+                        <Pencil className="h-3 w-3 shrink-0 opacity-60" />
+                        <span className="line-clamp-2 max-w-[100px]">
+                          {item.note?.trim() || 'เพิ่มหมายเหตุ'}
+                        </span>
+                      </button>
                     </td>
                     {isNotArrivedTab && (
                       <td className="px-6 py-5 align-middle text-center w-40 bg-purple-50">
-                        {editingWeightId === item.id ? (
-                          <div className="flex flex-col gap-1.5 min-w-[100px]">
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              value={editingWeightValue}
-                              onChange={(e) =>
-                                setEditingWeightValue(e.target.value.replace(/\D/g, ''))
-                              }
-                              placeholder="กรัม"
-                              className="rounded-lg border border-sakura-200 px-2.5 py-1.5 text-xs w-20
-                                         focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
-                              autoFocus
-                            />
-                            <div className="flex gap-1.5">
-                              <button
-                                onClick={handleSaveWeightGram}
-                                disabled={weightSaving}
-                                className="flex-1 inline-flex items-center justify-center gap-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white
-                                           hover:bg-indigo-700 disabled:opacity-50"
-                              >
-                                {weightSaving ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <Check className="h-3 w-3" />
-                                )}
-                                Save
-                              </button>
-                              <button
-                                onClick={cancelEditWeight}
-                                className="rounded border border-sakura-200 px-2 py-1 text-xs font-medium text-sakura-600 hover:bg-sakura-50"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              startEditWeight(item.id, item.weight_gram ?? null)
-                            }
-                            className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors"
-                          >
-                            <Pencil className="h-3 w-3 shrink-0 opacity-60" />
-                            {item.weight_gram != null ? (
-                              <span className="tabular-nums">{item.weight_gram} ก</span>
-                            ) : (
-                              'ใส่กรัม'
-                            )}
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={(e) =>
+                            startEditWeight(
+                              item.id,
+                              item.weight_gram ?? null,
+                              e.currentTarget.getBoundingClientRect()
+                            )
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-sakura-600 hover:bg-sakura-50 hover:text-sakura-800 transition-colors"
+                        >
+                          <Pencil className="h-3 w-3 shrink-0 opacity-60" />
+                          {item.weight_gram != null ? (
+                            <span className="tabular-nums">{item.weight_gram} ก</span>
+                          ) : (
+                            'ใส่กรัม'
+                          )}
+                        </button>
                       </td>
                     )}
                   </tr>
@@ -1034,7 +1425,7 @@ export default function CompletedAuctionsPage() {
                 {!isArrivedThTab && filtered.length === 0 && (
                   <tr>
                     <td
-                      colSpan={9}
+                      colSpan={10}
                       className="px-6 py-16 text-center align-middle"
                     >
                       <p className="text-sakura-500 font-medium">
@@ -1104,10 +1495,24 @@ export default function CompletedAuctionsPage() {
                 userItemsData.items?.length === 0 ? (
                   <p className="text-sakura-500 text-center py-8">ไม่มีรายการสินค้า</p>
                 ) : (() => {
+                  const lotGroupKey = (it: (typeof userItemsData.items)[number]) => {
+                    const lc = it.lot?.lotCode
+                    if (!lc) return '__NO_LOT__'
+                    const s = intlShippingSuffixForLot(it.lot ?? null)
+                    return s ? `${lc}__${s}` : lc
+                  }
+                  const lotGroupTitle = (key: string) => {
+                    if (key === '__NO_LOT__') return 'ไม่มี Lot'
+                    const parts = key.split('__')
+                    if (parts.length === 2 && (parts[1] === 'air' || parts[1] === 'sea')) {
+                      return `${parts[0]} (${parts[1]})`
+                    }
+                    return key
+                  }
                   const byLot = (userItemsData.items ?? []).reduce<
                     Record<string, typeof userItemsData.items>
                   >((acc, it) => {
-                    const key = it.lot?.lotCode ?? '__NO_LOT__'
+                    const key = lotGroupKey(it)
                     if (!acc[key]) acc[key] = []
                     acc[key]!.push(it)
                     return acc
@@ -1130,7 +1535,7 @@ export default function CompletedAuctionsPage() {
                           className={`rounded-2xl p-5 ${sectionBg[idx % sectionBg.length]} border border-sakura-200/60`}
                         >
                           <h3 className="text-base font-bold text-sakura-900 mb-4 pb-2 border-b border-sakura-200/80 text-center">
-                            {lotKey === '__NO_LOT__' ? 'ไม่มี Lot' : lotKey}
+                            {lotGroupTitle(lotKey)}
                           </h3>
                           <div className="space-y-3">
                             {byLot[lotKey]?.map((it) => (
@@ -1167,6 +1572,217 @@ export default function CompletedAuctionsPage() {
           </div>
         </div>
       )}
+
+      {editingNoteId != null &&
+        notePopoverPos != null &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[200] bg-sakura-950/25"
+              aria-hidden
+              onClick={() => cancelEditNote()}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="completed-note-popover-title"
+              className="fixed z-[210] flex max-h-[min(300px,calc(100vh-24px))] flex-col rounded-xl border border-sakura-200/90 bg-white p-3 shadow-lg ring-1 ring-black/5"
+              style={{
+                top: notePopoverPos.top,
+                left: notePopoverPos.left,
+                width: notePopoverPos.width,
+                maxWidth: 'min(240px, calc(100vw - 24px))',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p id="completed-note-popover-title" className="text-xs font-semibold text-sakura-900 mb-1.5">
+                แก้ไขหมายเหตุ
+              </p>
+              <textarea
+                value={editingNoteValue}
+                onChange={(e) => setEditingNoteValue(e.target.value.slice(0, 2000))}
+                placeholder="พิมพ์หมายเหตุ..."
+                rows={4}
+                maxLength={2000}
+                className="w-full min-h-[72px] flex-1 rounded-lg border border-sakura-200 px-2 py-1.5 text-xs resize-y
+                           focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+                autoFocus
+              />
+              <p className="text-[10px] text-muted mt-1 mb-2 tabular-nums">
+                {editingNoteValue.length} / 2000
+              </p>
+              <div className="flex gap-1.5 justify-end border-t border-sakura-100 pt-2">
+                <button
+                  type="button"
+                  onClick={() => cancelEditNote()}
+                  className="rounded-lg border border-sakura-200 px-2 py-1 text-[11px] font-medium text-sakura-700 hover:bg-sakura-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveNote()}
+                  disabled={noteSaving}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {noteSaving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
+                  บันทึก
+                </button>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
+
+      {editingWeightId != null &&
+        weightPopoverPos != null &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[200] bg-sakura-950/25"
+              aria-hidden
+              onClick={() => cancelEditWeight()}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="completed-weight-popover-title"
+              className="fixed z-[210] flex max-h-[min(260px,calc(100vh-24px))] flex-col rounded-xl border border-sakura-200/90 bg-white p-3 shadow-lg ring-1 ring-black/5"
+              style={{
+                top: weightPopoverPos.top,
+                left: weightPopoverPos.left,
+                width: weightPopoverPos.width,
+                maxWidth: 'min(220px, calc(100vw - 24px))',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p id="completed-weight-popover-title" className="text-xs font-semibold text-sakura-900 mb-1.5">
+                ใส่น้ำหนัก (กรัม)
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={editingWeightValue}
+                onChange={(e) => setEditingWeightValue(e.target.value.replace(/\D/g, ''))}
+                placeholder="กรัม"
+                className="w-full rounded-lg border border-sakura-200 px-2 py-1.5 text-xs tabular-nums
+                           focus:outline-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-300"
+                autoFocus
+              />
+              <div className="flex gap-1.5 justify-end border-t border-sakura-100 pt-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => cancelEditWeight()}
+                  className="rounded-lg border border-sakura-200 px-2 py-1 text-[11px] font-medium text-sakura-700 hover:bg-sakura-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveWeightGram()}
+                  disabled={weightSaving}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {weightSaving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
+                  บันทึก
+                </button>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
+
+      {editingDomesticUserId != null &&
+        domesticPopoverPos != null &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[200] bg-sakura-950/25"
+              aria-hidden
+              onClick={() => cancelEditDomestic()}
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="completed-domestic-popover-title"
+              className="fixed z-[210] flex max-h-[min(260px,calc(100vh-24px))] flex-col rounded-xl border border-teal-200/90 bg-white p-3 shadow-lg ring-1 ring-black/5"
+              style={{
+                top: domesticPopoverPos.top,
+                left: domesticPopoverPos.left,
+                width: domesticPopoverPos.width,
+                maxWidth: 'min(240px, calc(100vw - 24px))',
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p id="completed-domestic-popover-title" className="text-xs font-semibold text-sakura-900 mb-1.5">
+                ค่าจัดส่งในประเทศ (บาท)
+              </p>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={editingDomesticValue}
+                onChange={(e) => setEditingDomesticValue(e.target.value.replace(/\D/g, ''))}
+                placeholder="บาท"
+                className="w-full rounded-lg border border-sakura-200 px-2 py-1.5 text-xs tabular-nums
+                           focus:outline-none focus:ring-2 focus:ring-teal-200 focus:border-teal-300"
+                autoFocus
+              />
+              <div className="flex gap-1.5 justify-end border-t border-sakura-100 pt-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => cancelEditDomestic()}
+                  className="rounded-lg border border-sakura-200 px-2 py-1 text-[11px] font-medium text-sakura-700 hover:bg-sakura-50"
+                >
+                  ยกเลิก
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveDomesticShipping()}
+                  disabled={domesticSaving}
+                  className="inline-flex items-center justify-center gap-1 rounded-lg bg-teal-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+                >
+                  {domesticSaving ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Check className="h-3 w-3" />
+                  )}
+                  บันทึก
+                </button>
+              </div>
+            </div>
+          </>,
+          document.body
+        )}
+
+      <BuyoutAddProductModal
+        open={addProductModalOpen}
+        onClose={() => setAddProductModalOpen(false)}
+        onSuccess={() => void fetchData()}
+        initialUsername={addProductModalInitialUsername}
+        clientEntry="not_arrived_japan"
+      />
     </div>
+  )
+}
+
+export default function CompletedAuctionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-24 text-muted">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      }
+    >
+      <CompletedAuctionsPageContent />
+    </Suspense>
   )
 }
